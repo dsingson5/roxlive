@@ -1,0 +1,241 @@
+@import "tailwindcss";
+
+@theme {
+  /* ---- RoxLive design tokens ---- */
+  --color-bg: #07080a;
+  --color-bg2: #0b0d11;
+  --color-surface: #11141a;
+  --color-surface2: #171b23;
+  --color-line: rgba(255, 255, 255, 0.07);
+  --color-line2: rgba(255, 255, 255, 0.12);
+
+  --color-volt: #d8ff3a;
+  --color-volt-dim: #9db82a;
+  --color-cyan: #38e1ff;
+  --color-mag: #ff3d81;
+  --color-amber: #ffb02e;
+  --color-red: #ff4d4d;
+  --color-mint: #3dffb5;
+
+  --color-z1: #6b87a8;
+  --color-z2: #38b6ff;
+  --color-z3: #3dffb5;
+  --color-z4: #ffb02e;
+  --color-z5: #ff4d6b;
+
+  --color-ink: #f2f4f6;
+  --color-ink-dim: #9aa3b2;
+  --color-ink-faint: #5d6675;
+
+  --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-card: 1.25rem;
+
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 24px 48px -24px rgba(0, 0, 0, 0.7);
+
+  --animate-fade-up: fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-pulse-soft: pulse-soft 2.4s ease-in-out infinite;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes pulse-soft {
+    0%,
+    100% {
+      opacity: 0.55;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-feature-settings: "ss01", "cv05";
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+#root {
+  min-height: 100%;
+}
+
+/* Ambient backdrop: layered glows + fine grid */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  background:
+    radial-gradient(900px 500px at 12% -10%, rgba(216, 255, 58, 0.07), transparent 60%),
+    radial-gradient(800px 520px at 95% 0%, rgba(56, 225, 255, 0.06), transparent 55%),
+    radial-gradient(900px 700px at 50% 115%, rgba(255, 61, 129, 0.05), transparent 60%),
+    var(--color-bg);
+}
+.ambient::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, black 30%, transparent 75%);
+}
+
+/* Glass card */
+.card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(14px);
+}
+
+.card-title {
+  font-family: var(--font-display);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-faint);
+}
+
+.num {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.02em;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Volt CTA button */
+.btn-volt {
+  background: var(--color-volt);
+  color: #0b0c06;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border-radius: 0.9rem;
+  box-shadow: 0 0 0 1px rgba(216, 255, 58, 0.4), 0 8px 30px -8px rgba(216, 255, 58, 0.45);
+  transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+.btn-volt:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 0 0 1px rgba(216, 255, 58, 0.55), 0 10px 36px -8px rgba(216, 255, 58, 0.6);
+}
+.btn-volt:active {
+  transform: scale(0.97);
+}
+.btn-volt:disabled {
+  filter: saturate(0.2) brightness(0.6);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  border: 1px solid var(--color-line2);
+  border-radius: 0.9rem;
+  color: var(--color-ink-dim);
+  font-family: var(--font-display);
+  font-weight: 600;
+  transition: all 0.15s ease;
+  background: rgba(255, 255, 255, 0.02);
+}
+.btn-ghost:hover {
+  color: var(--color-ink);
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.05);
+}
+.btn-ghost:active {
+  transform: scale(0.97);
+}
+
+/* Form input */
+.inp {
+  width: 100%;
+  height: 2.5rem;
+  padding: 0 0.75rem;
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-line2);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.inp:focus {
+  border-color: rgba(216, 255, 58, 0.5);
+  box-shadow: 0 0 0 3px rgba(216, 255, 58, 0.12);
+}
+
+/* Thin scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* HR pulse ring (duration set inline from live HR) */
+@keyframes hr-ring {
+  0% {
+    transform: scale(0.86);
+    opacity: 0.85;
+  }
+  70% {
+    transform: scale(1.22);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.22);
+    opacity: 0;
+  }
+}
+.hr-ring {
+  animation-name: hr-ring;
+  animation-timing-function: cubic-bezier(0.2, 0.6, 0.4, 1);
+  animation-iteration-count: infinite;
+}
+
+@keyframes blink-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+.live-dot {
+  animation: blink-dot 1.6s ease-in-out infinite;
+}
