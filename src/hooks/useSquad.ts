@@ -62,6 +62,9 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
   const [running, setRunning] = useState(false);
 
   const recs = useRef<Map<string, Rec>>(new Map());
+  // Synchronous source of truth for plan-start timestamps. Written immediately
+  // (state is async), so sim target fns + the tick read a consistent anchor.
+  const anchors = useRef<Map<string, number>>(new Map());
   const athRef = useRef<SquadAthlete[]>([]);
   athRef.current = athletes;
   const coach = useRef<VoiceCoach | null>(null);
@@ -91,7 +94,8 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
       if (!rec) continue;
       const snap = rec.engine.tick(t);
       snaps[a.id] = snap;
-      const planElapsed = a.anchor != null ? (t - a.anchor) / 1000 : -1;
+      const anchor = anchors.current.get(a.id);
+      const planElapsed = anchor != null ? (t - anchor) / 1000 : -1;
       vws[a.id] = computeRunnerView(a.plan, a.profile, voice.leadInSec, planElapsed, snap.hr);
     }
 
@@ -143,7 +147,7 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
   /* ---------------- squad voice ---------------- */
   function runVoice(_t: number, list: SquadAthlete[], _snaps: Record<string, MetricsSnapshot>, vws: Record<string, RunnerView>) {
     const c = coach.current!;
-    const active = list.filter((a) => a.source !== "idle" && a.plan && a.anchor != null);
+    const active = list.filter((a) => a.source !== "idle" && a.plan && anchors.current.has(a.id));
     const runningOnes = active.filter((a) => {
       const v = vws[a.id];
       return v && (v.phase === "running" || v.phase === "leadin");
@@ -152,9 +156,10 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
 
     // Synced = everyone on the same plan, started together (same anchor).
     const a0 = runningOnes[0];
+    const anc = (a: SquadAthlete) => anchors.current.get(a.id) ?? 0;
     const synced =
       runningOnes.length > 1 &&
-      runningOnes.every((a) => a.plan?.id === a0.plan?.id && Math.abs((a.anchor ?? 0) - (a0.anchor ?? 0)) < 80);
+      runningOnes.every((a) => a.plan?.id === a0.plan?.id && Math.abs(anc(a) - anc(a0)) < 80);
 
     const once = (token: string, fn: () => void) => {
       if (fired.current.has(token)) return;
@@ -219,9 +224,12 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
   const removeAthlete = useCallback((id: string) => {
     teardown(id);
     recs.current.delete(id);
+    anchors.current.delete(id);
+    clearFiredFor(id);
     setAthletes((prev) => prev.filter((a) => a.id !== id));
     setSnapshots((s) => { const n = { ...s }; delete n[id]; return n; });
     setViews((s) => { const n = { ...s }; delete n[id]; return n; });
+    setAdherence((s) => { const n = { ...s }; delete n[id]; return n; });
   }, []);
 
   const patch = (id: string, fn: (a: SquadAthlete) => SquadAthlete) =>
@@ -238,6 +246,9 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
   const setPlan = useCallback((id: string, plan: WorkoutPlan | null) => patch(id, (a) => ({ ...a, plan })), []);
 
   /* ---------------- sources + start ---------------- */
+  // Plan-target HR for a sim. Reads the live anchor (synchronous ref) and uses
+  // the real-time clock so it's correct no matter when the plan was started
+  // relative to the simulator.
   const planTargetFor = (a: SquadAthlete) => {
     if (!a.plan) return undefined;
     const ends = cumulativeEnds(a.plan);
@@ -246,11 +257,10 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
     const plan = a.plan;
     const profile = a.profile;
     const recId = a.id;
-    return (simElapsedSec: number): number | null => {
-      // sim elapsed ≈ plan elapsed (source + anchor start together for sims)
-      const anchor = athRef.current.find((x) => x.id === recId)?.anchor;
-      if (anchor == null) return null;
-      const e = simElapsedSec;
+    return (_simElapsedSec: number): number | null => {
+      const anchor = anchors.current.get(recId);
+      if (anchor == null) return null; // plan not started yet → warm up
+      const e = (now() - anchor) / 1000;
       if (e < lead) return null;
       const t = e - lead;
       let idx = ends.findIndex((x) => t < x);
@@ -262,6 +272,8 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
     };
   };
 
+  // Bring a simulated HR source online (warm-up). Does NOT start the plan — the
+  // user presses "Start workout" (startPlan) or "Start all".
   const startSim = useCallback((id: string) => {
     const a = athRef.current.find((x) => x.id === id);
     const rec = recs.current.get(id);
@@ -271,6 +283,7 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
     rec.engine.reset();
     rec.engine.start(now());
     rec.inTarget = 0; rec.total = 0;
+    clearFiredFor(id);
     const sim = new RaceSimulator(a.profile, (s: HRSample) => rec.engine.ingestHR(s), (s: PaceSample) => rec.engine.ingestPace(s), {
       targetHrFn: planTargetFor(a),
       onCadence: (t, spm) => rec.engine.ingestCadence(t, spm),
@@ -279,9 +292,8 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
     sim.start();
     rec.sim = sim;
     rec.ble = null;
-    patch(id, (x) => ({ ...x, source: "sim", deviceName: "Simulated", anchor: x.plan ? now() : x.anchor }));
+    patch(id, (x) => ({ ...x, source: "sim", deviceName: "Simulated" }));
     coach.current!.prime();
-    clearFiredFor(id); // only this athlete's cues — don't disturb others mid-run
     setRunning(true);
     ensureLoop();
   }, [ensureLoop, voice.leadInSec]);
@@ -291,7 +303,12 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
     const rec = recs.current.get(id);
     if (!rec) return;
     rec.sim?.stop(); rec.sim = null;
+    // Reset + start the engine BEFORE notifications can arrive, so no early
+    // sample is dropped while the engine is in a not-yet-started state.
     rec.engine.reset();
+    rec.engine.start(now());
+    rec.inTarget = 0; rec.total = 0;
+    clearFiredFor(id);
     const ble = new HeartRateBLE(
       (s) => rec.engine.ingestHR(s),
       (d) => { patch(id, (x) => ({ ...x, deviceName: d.name })); },
@@ -300,20 +317,24 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
       (t, c) => rec.engine.ingestTemp(t, c)
     );
     rec.ble = ble;
-    await ble.connect();
-    rec.engine.start(now());
-    rec.inTarget = 0; rec.total = 0;
-    patch(id, (x) => ({ ...x, source: "live" }));
     coach.current!.prime();
     setRunning(true);
     ensureLoop();
+    await ble.connect();
+    patch(id, (x) => ({ ...x, source: "live" }));
   }, [ensureLoop]);
 
   /** Anchor an athlete's plan now (begins lead-in + coaching). Requires a live source + plan. */
   const startPlan = useCallback((id: string) => {
+    const a = athRef.current.find((x) => x.id === id);
+    const rec = recs.current.get(id);
+    if (!a || a.source === "idle" || !a.plan || !rec) return;
     coach.current!.prime();
     clearFiredFor(id);
-    patch(id, (a) => (a.source !== "idle" && a.plan ? { ...a, anchor: now() } : a));
+    rec.inTarget = 0; rec.total = 0; // fresh adherence for this run
+    const t = now();
+    anchors.current.set(id, t); // synchronous — sim target fn reads this immediately
+    patch(id, (x) => ({ ...x, anchor: t }));
   }, []);
 
   const startAll = useCallback(() => {
@@ -326,7 +347,7 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
       if (!rec) return;
       if (a.source === "idle") {
         // auto-start a simulator for anyone without a source
-        rec.engine.reset(); rec.engine.start(t); rec.inTarget = 0; rec.total = 0;
+        rec.engine.reset(); rec.engine.start(t);
         const sim = new RaceSimulator(a.profile, (s) => rec.engine.ingestHR(s), (s) => rec.engine.ingestPace(s), {
           targetHrFn: planTargetFor(a),
           onCadence: (tt, spm) => rec.engine.ingestCadence(tt, spm),
@@ -335,8 +356,10 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
         sim.start();
         rec.sim = sim;
       }
+      rec.inTarget = 0; rec.total = 0;
+      // synchronized anchor for everyone with a plan (so the voice says "Everyone")
+      if (a.plan) anchors.current.set(a.id, t);
     });
-    // synchronized anchor for everyone with a plan
     setAthletes((prev) => prev.map((a) => ({
       ...a,
       source: a.source === "idle" ? "sim" : a.source,
@@ -354,6 +377,7 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
     if (bg.current !== null) { clearInterval(bg.current); bg.current = null; }
     coach.current!.cancel();
     fired.current = new Set();
+    anchors.current.clear();
     setAthletes((prev) => prev.map((a) => ({ ...a, source: "idle", anchor: null, deviceName: null })));
     // Clear live state so the cards drop back to their idle controls (the tick
     // loop is stopped, so it won't update these on its own).

@@ -136,8 +136,10 @@ export async function handleRedirectIfPresent(): Promise<{ status: "connected" |
   } catch {
     /* ignore */
   }
-  if (expected && state && expected !== state) {
-    return { status: "error", message: "Strava state mismatch — please try connecting again." };
+  // CSRF: require the state we stored to be present AND to match. A missing or
+  // mismatched state (e.g. a forged redirect) is rejected, never silently passed.
+  if (!expected || !state || expected !== state) {
+    return { status: "error", message: "Strava state check failed — please connect again." };
   }
   if (!isConfigured()) return { status: "error", message: "Strava isn't configured (Client ID / Worker URL)." };
 
