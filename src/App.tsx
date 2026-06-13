@@ -314,7 +314,16 @@ export default function App() {
         onSave={savePlanAndClose}
         onStart={adoptWorkout}
       />
-      <SettingsDrawer open={settingsOpen} profile={profile} onClose={() => setSettingsOpen(false)} onSave={eng.setProfile} />
+      <SettingsDrawer
+        open={settingsOpen}
+        profile={profile}
+        apiKey={apiKey}
+        onApiKeyChange={persistApiKey}
+        model={visionModel}
+        onModelChange={persistModel}
+        onClose={() => setSettingsOpen(false)}
+        onSave={eng.setProfile}
+      />
       <SummaryModal
         summary={summary}
         fullSeries={fullSeriesRef.current}

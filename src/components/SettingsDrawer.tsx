@@ -2,15 +2,24 @@ import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 import type { AthleteProfile } from "../types";
 import { zoneBounds } from "../lib/zones";
+import { VISION_MODELS } from "../lib/vision";
 
 export function SettingsDrawer({
   open,
   profile,
+  apiKey,
+  onApiKeyChange,
+  model,
+  onModelChange,
   onClose,
   onSave,
 }: {
   open: boolean;
   profile: AthleteProfile;
+  apiKey: string;
+  onApiKeyChange: (k: string) => void;
+  model: string;
+  onModelChange: (m: string) => void;
   onClose: () => void;
   onSave: (p: AthleteProfile) => void;
 }) {
@@ -67,6 +76,31 @@ export function SettingsDrawer({
                   ))}
                 </div>
               </Field>
+
+              {/* Claude vision (photo import) */}
+              <div>
+                <div className="card-title mb-2">Photo Import · Claude API Key</div>
+                <p className="text-[11px] text-[var(--color-ink-faint)] leading-relaxed mb-2">
+                  Only needed for "Analyze photo" in the Workout builder. Get one at platform.claude.com.
+                  Stored in this browser only and sent solely to api.anthropic.com — saves as you type.
+                </p>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => onApiKeyChange(e.target.value)}
+                  placeholder="Anthropic API key (sk-ant-…)"
+                  className="inp"
+                  autoComplete="off"
+                />
+                <select value={model} onChange={(e) => onModelChange(e.target.value)} className="inp mt-2">
+                  {VISION_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+                {apiKey.trim() && (
+                  <div className="mono text-[10px] text-[var(--color-mint)] mt-1.5">✓ key saved on this device</div>
+                )}
+              </div>
 
               {/* zone preview */}
               <div>

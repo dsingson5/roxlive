@@ -86,7 +86,31 @@ export function TopBar({
           </button>
         </div>
       </div>
+
+      {/* Mode switcher row — phones only (the inline pills above are md+) */}
+      <div className="md:hidden max-w-[1480px] mx-auto px-4 pb-2.5">
+        <div className="flex items-center bg-white/[0.04] rounded-xl p-0.5 border border-[var(--color-line)]">
+          <MobileModeBtn active={raceMode === "free"} onClick={() => onRaceModeChange("free")}>Analyzer</MobileModeBtn>
+          <MobileModeBtn active={raceMode === "hyrox"} onClick={() => onRaceModeChange("hyrox")}>HYROX</MobileModeBtn>
+          <MobileModeBtn active={raceMode === "workout"} onClick={() => onRaceModeChange("workout")}>Workout</MobileModeBtn>
+        </div>
+      </div>
     </header>
+  );
+}
+
+function MobileModeBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex-1 h-9 text-[13px] font-semibold rounded-lg transition-colors"
+      style={{
+        background: active ? "var(--color-volt)" : "transparent",
+        color: active ? "#0b0c06" : "var(--color-ink-dim)",
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
