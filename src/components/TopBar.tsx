@@ -19,8 +19,8 @@ export function TopBar({
   snap: MetricsSnapshot;
   device: DeviceInfo | null;
   mode: SourceMode;
-  raceMode: "free" | "hyrox" | "workout";
-  onRaceModeChange: (m: "free" | "hyrox" | "workout") => void;
+  raceMode: "free" | "hyrox" | "workout" | "squad";
+  onRaceModeChange: (m: "free" | "hyrox" | "workout" | "squad") => void;
   onConnect: () => void;
   onDemo: () => void;
   onStop: () => void;
@@ -48,15 +48,18 @@ export function TopBar({
           <ModeBtn active={raceMode === "free"} onClick={() => onRaceModeChange("free")}>Analyzer</ModeBtn>
           <ModeBtn active={raceMode === "hyrox"} onClick={() => onRaceModeChange("hyrox")}>HYROX</ModeBtn>
           <ModeBtn active={raceMode === "workout"} onClick={() => onRaceModeChange("workout")}>Workout</ModeBtn>
+          <ModeBtn active={raceMode === "squad"} onClick={() => onRaceModeChange("squad")}>Squad</ModeBtn>
         </div>
 
-        {/* session clock */}
-        <div className="flex items-center gap-2 ml-1">
-          {live && <span className="live-dot w-2 h-2 rounded-full bg-[var(--color-red)]" />}
-          <span className="num text-xl tabular-nums" style={{ color: live ? "var(--color-ink)" : "var(--color-ink-faint)" }}>
-            {fmtClock(snap.elapsedSec)}
-          </span>
-        </div>
+        {/* session clock (solo modes only) */}
+        {raceMode !== "squad" && (
+          <div className="flex items-center gap-2 ml-1">
+            {live && <span className="live-dot w-2 h-2 rounded-full bg-[var(--color-red)]" />}
+            <span className="num text-xl tabular-nums" style={{ color: live ? "var(--color-ink)" : "var(--color-ink-faint)" }}>
+              {fmtClock(snap.elapsedSec)}
+            </span>
+          </div>
+        )}
 
         <div className="flex-1" />
 
@@ -65,7 +68,7 @@ export function TopBar({
 
         {/* actions */}
         <div className="flex items-center gap-2">
-          {!live ? (
+          {raceMode === "squad" ? null : !live ? (
             <>
               <button
                 onClick={onConnect}
@@ -98,6 +101,7 @@ export function TopBar({
           <MobileModeBtn active={raceMode === "free"} onClick={() => onRaceModeChange("free")}>Analyzer</MobileModeBtn>
           <MobileModeBtn active={raceMode === "hyrox"} onClick={() => onRaceModeChange("hyrox")}>HYROX</MobileModeBtn>
           <MobileModeBtn active={raceMode === "workout"} onClick={() => onRaceModeChange("workout")}>Workout</MobileModeBtn>
+          <MobileModeBtn active={raceMode === "squad"} onClick={() => onRaceModeChange("squad")}>Squad</MobileModeBtn>
         </div>
       </div>
     </header>

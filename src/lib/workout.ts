@@ -5,8 +5,10 @@
 
 import type {
   AthleteProfile,
+  HrTargetStatus,
   IntervalTarget,
   ParsedWorkout,
+  RunnerPhase,
   WorkoutInterval,
   WorkoutIntervalKind,
   WorkoutPlan,
@@ -67,6 +69,69 @@ export const KIND_COLOR: Record<WorkoutIntervalKind, string> = {
 
 export function planDurationSec(plan: WorkoutPlan): number {
   return plan.intervals.reduce((a, i) => a + Math.max(0, i.durationSec), 0);
+}
+
+/** A read-only snapshot of where an athlete is in their plan (no side effects). */
+export interface RunnerView {
+  phase: RunnerPhase;
+  currentIndex: number;
+  interval: WorkoutInterval | null;
+  nextInterval: WorkoutInterval | null;
+  remainingSec: number;
+  fraction: number;
+  band: { low: number; high: number } | null;
+  hrStatus: HrTargetStatus;
+  totalIntervals: number;
+}
+
+/**
+ * Pure computation of plan progress at a given plan-elapsed time. Used for the
+ * squad (one call per athlete per tick) and anywhere a non-hook view is needed.
+ * `planElapsedSec < 0` (or no plan) → idle.
+ */
+export function computeRunnerView(
+  plan: WorkoutPlan | null,
+  profile: AthleteProfile,
+  leadInSec: number,
+  planElapsedSec: number,
+  hr: number | null
+): RunnerView {
+  const base: RunnerView = {
+    phase: "idle",
+    currentIndex: -1,
+    interval: null,
+    nextInterval: plan?.intervals[0] ?? null,
+    remainingSec: 0,
+    fraction: 0,
+    band: null,
+    hrStatus: "none",
+    totalIntervals: plan?.intervals.length ?? 0,
+  };
+  if (!plan || planElapsedSec < 0) return base;
+  if (planElapsedSec < leadInSec) {
+    return { ...base, phase: "leadin", remainingSec: Math.max(0, leadInSec - planElapsedSec) };
+  }
+  const t = planElapsedSec - leadInSec;
+  const ends = cumulativeEnds(plan);
+  const idx = ends.findIndex((e) => t < e);
+  if (idx < 0) return { ...base, phase: "done", currentIndex: plan.intervals.length - 1, nextInterval: null };
+  const interval = plan.intervals[idx];
+  const start = idx > 0 ? ends[idx - 1] : 0;
+  const ie = t - start;
+  const band = resolveBand(interval.target, profile);
+  let hrStatus: HrTargetStatus = "none";
+  if (band && hr != null) hrStatus = hr < band.low ? "under" : hr > band.high ? "over" : "in";
+  return {
+    phase: "running",
+    currentIndex: idx,
+    interval,
+    nextInterval: plan.intervals[idx + 1] ?? null,
+    remainingSec: Math.max(0, interval.durationSec - ie),
+    fraction: interval.durationSec > 0 ? Math.min(1, ie / interval.durationSec) : 0,
+    band,
+    hrStatus,
+    totalIntervals: plan.intervals.length,
+  };
 }
 
 /** Cumulative end-times (sec) for each interval. */

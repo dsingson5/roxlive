@@ -30,11 +30,23 @@ Plus a full **HYROX race guide**: all 8 stations with pacing, technique cues,
 mistakes to avoid, transition advice, and Open/Pro targets — with the current
 station's coaching surfaced live as a simulated race progresses.
 
-## Three modes
+## Four modes
 
 - **Analyzer** — the raw real-time lab: HR, DFA-α1, decoupling, breathing, HRV.
 - **HYROX** — the 8-run / 8-station race guide with live station coaching.
 - **Workout** — guided interval sessions from *your* plan (below).
+- **Squad** — multiple athletes at once (below).
+
+## Squad mode (multi-athlete)
+
+Coach a group on one screen. Add up to 8 athletes, give each their own HR
+strap (or a simulator), and assign each the **same or a different** workout.
+**Start all** launches a synchronized squad; or start athletes individually.
+
+The voice coach names who a countdown is for before counting — *"Aura, 3, 2,
+1"* for an individual, or *"Everyone, 3, 2, 1"* when the whole squad hits a
+boundary together. Each athlete card shows live HR, zone, cadence/temp, their
+current interval + countdown, and % time in their target band.
 
 ## Guided Workout: photo → coached intervals
 

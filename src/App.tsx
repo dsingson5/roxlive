@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { useEngine } from "./hooks/useEngine";
 import { useWorkoutRunner } from "./hooks/useWorkoutRunner";
+import { useSquad, MAX_ATHLETES } from "./hooks/useSquad";
 import type {
   SegmentRecord,
   SeriesPoint,
@@ -14,7 +15,7 @@ import type {
 import { DEFAULT_VOICE } from "./types";
 import { buildRace } from "./data/hyrox";
 import { selfTestDFA } from "./lib/dfa";
-import { cumulativeEnds, loadPlan, resolveBand, savePlan } from "./lib/workout";
+import { cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan } from "./lib/workout";
 import { VISION_MODELS } from "./lib/vision";
 import { VoiceCoach } from "./lib/voice";
 import { addToHistory, clearHistory, deleteFromHistory, loadHistory } from "./lib/history";
@@ -40,12 +41,13 @@ import { SettingsDrawer } from "./components/SettingsDrawer";
 import { SummaryModal } from "./components/SummaryModal";
 import { HistoryModal } from "./components/HistoryModal";
 import { CountdownOverlay } from "./components/CountdownOverlay";
+import { SquadView } from "./components/SquadView";
 
 export default function App() {
   const eng = useEngine();
   const { snapshot: snap, series, profile } = eng;
 
-  const [raceMode, setRaceMode] = useState<"free" | "hyrox" | "workout">("hyrox");
+  const [raceMode, setRaceMode] = useState<"free" | "hyrox" | "workout" | "squad">("hyrox");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [manualFocus, setManualFocus] = useState<number | null>(null);
@@ -128,6 +130,15 @@ export default function App() {
     return planFnRef.current(t);
   }, []);
 
+  // Multi-athlete squad (its own engines; independent of the solo session).
+  const squad = useSquad(voice, profile);
+  const squadPlans = useMemo(() => {
+    const list: WorkoutPlan[] = [];
+    if (plan) list.push(plan);
+    for (const s of samplePlans()) list.push(s);
+    return list;
+  }, [plan]);
+
   const workoutActive =
     raceMode === "workout" && eng.mode !== "idle" && !!plan && workoutAnchor != null;
   const runner = useWorkoutRunner({
@@ -199,7 +210,10 @@ export default function App() {
     setWorkoutAnchor(t);
   };
 
-  const handleModeChange = (m: "free" | "hyrox" | "workout") => {
+  const handleModeChange = (m: "free" | "hyrox" | "workout" | "squad") => {
+    const leavingSquad = raceMode === "squad" && m !== "squad";
+    if (leavingSquad) squad.stopAll();
+    if (m === "squad" && eng.mode !== "idle") eng.stop(); // free the solo session
     setRaceMode(m);
     hyroxFired.current = new Set(); // avoid stale countdown tokens across modes
     if (m !== "workout") clearAnchor();
@@ -300,6 +314,7 @@ export default function App() {
   }, [eng.mode]);
 
   const handleStop = () => {
+    if (raceMode === "squad") return; // squad has its own lifecycle
     const workoutSegs =
       raceMode === "workout" && plan && workoutAnchor != null
         ? workoutSegmentRecords(plan, workoutAnchor, voice.leadInSec, runner.state.perInterval, snap.t)
@@ -352,6 +367,31 @@ export default function App() {
           </div>
         )}
 
+        {raceMode === "squad" ? (
+          <SquadView
+            athletes={squad.athletes}
+            snapshots={squad.snapshots}
+            views={squad.views}
+            adherence={squad.adherence}
+            running={squad.running}
+            plans={squadPlans}
+            supported={squad.supported}
+            max={MAX_ATHLETES}
+            h={{
+              addAthlete: squad.addAthlete,
+              removeAthlete: squad.removeAthlete,
+              setName: squad.setName,
+              setMaxHr: squad.setMaxHr,
+              setPlan: squad.setPlan,
+              startSim: squad.startSim,
+              connectSensor: squad.connectSensor,
+              startPlan: squad.startPlan,
+              startAll: squad.startAll,
+              stopAll: squad.stopAll,
+            }}
+          />
+        ) : (
+        <>
         {eng.mode === "idle" && !summary && raceMode !== "workout" && (
           <WelcomeBanner onDemo={handleDemo} onConnect={handleConnect} supported={eng.supported} />
         )}
@@ -419,6 +459,8 @@ export default function App() {
 
         {/* Zone distribution */}
         <ZoneBars snap={snap} />
+        </>
+        )}
 
         <Footer />
       </main>
