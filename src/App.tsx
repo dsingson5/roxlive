@@ -18,6 +18,7 @@ import { cumulativeEnds, loadPlan, resolveBand, savePlan } from "./lib/workout";
 import { VISION_MODELS } from "./lib/vision";
 import { VoiceCoach } from "./lib/voice";
 import { addToHistory, clearHistory, deleteFromHistory, loadHistory } from "./lib/history";
+import * as strava from "./lib/strava";
 import { TopBar } from "./components/TopBar";
 import { HeroHR, DfaGauge } from "./components/HeroPanels";
 import { LiveChart } from "./components/LiveChart";
@@ -53,6 +54,42 @@ export default function App() {
   const [history, setHistory] = useState<SessionSummary[]>(() => loadHistory());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDetail, setHistoryDetail] = useState<SessionSummary | null>(null);
+
+  // Strava
+  const [stravaCfg, setStravaCfg] = useState(() => strava.loadConfig());
+  const [stravaConnected, setStravaConnected] = useState(() => strava.isConnected());
+  const [stravaAthlete, setStravaAthlete] = useState<string | null>(() => strava.connectedAthlete());
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Complete a Strava OAuth redirect if we came back with a ?code.
+  useEffect(() => {
+    strava.handleRedirectIfPresent().then((res) => {
+      if (!res) return;
+      if (res.status === "connected") {
+        setStravaConnected(true);
+        setStravaAthlete(strava.connectedAthlete());
+        setNotice("Strava connected ✓");
+      } else {
+        setNotice(res.message || "Strava connection failed.");
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    const id = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(id);
+  }, [notice]);
+
+  const saveStravaCfg = (c: strava.StravaConfig) => {
+    strava.saveConfig(c);
+    setStravaCfg(strava.loadConfig());
+  };
+  const disconnectStrava = () => {
+    strava.disconnect();
+    setStravaConnected(false);
+    setStravaAthlete(null);
+  };
 
   // Workout-mode state (persisted locally).
   const [plan, setPlan] = useState<WorkoutPlan | null>(() => loadPlan());
@@ -302,6 +339,12 @@ export default function App() {
       />
 
       <main className="max-w-[1480px] mx-auto px-4 sm:px-6 py-5 space-y-4">
+        {notice && (
+          <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="card px-4 py-3 text-sm flex items-center gap-3" style={{ borderColor: "rgba(252,76,2,0.4)" }}>
+            <span className="text-[#fc4c02]">●</span>
+            <span className="text-[var(--color-ink-dim)]">{notice}</span>
+          </motion.div>
+        )}
         {eng.error && (
           <div className="card px-4 py-3 text-sm flex items-center gap-3" style={{ borderColor: "rgba(255,176,46,0.4)" }}>
             <span className="text-[var(--color-amber)]">⚠</span>
@@ -401,6 +444,14 @@ export default function App() {
         onApiKeyChange={persistApiKey}
         model={visionModel}
         onModelChange={persistModel}
+        strava={{
+          config: stravaCfg,
+          connected: stravaConnected,
+          athlete: stravaAthlete,
+          onSaveConfig: saveStravaCfg,
+          onConnect: strava.beginAuthorize,
+          onDisconnect: disconnectStrava,
+        }}
         onClose={() => setSettingsOpen(false)}
         onSave={eng.setProfile}
       />
@@ -408,6 +459,7 @@ export default function App() {
       <SummaryModal
         summary={summary}
         fullSeries={fullSeriesRef.current}
+        strava={{ connected: stravaConnected, post: strava.postActivity }}
         onClose={() => {
           setSummary(null);
           eng.reset();

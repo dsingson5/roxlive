@@ -108,6 +108,14 @@ Every finished session is saved on-device and listed in the **History** panel
 and an HR trace. Open any past session for the full summary — including .FIT
 re-export.
 
+## Strava (optional)
+
+Post finished sessions straight to Strava — **only when you tap "Post to
+Strava" and confirm**. Because the site is static, the OAuth secret lives in a
+tiny free Cloudflare Worker you deploy once; tokens stay in your browser. Setup
+(Strava app + worker, ~10 min) is in [strava/README.md](strava/README.md), then
+**⚙ Settings → Strava → Connect**.
+
 ## Export
 
 Every finished session can be exported as a **Garmin .FIT activity file**

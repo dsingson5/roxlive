@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { SeriesPoint, SessionSummary } from "../types";
+import type { PostResult } from "../lib/strava";
 import { Sparkline } from "./Charts";
 import { ZONE_DEFS } from "../lib/zones";
 import { downloadFit } from "../lib/fit";
@@ -8,11 +10,16 @@ import { fmtClock, fmtDist, fmtNum, fmtSigned } from "../lib/format";
 export function SummaryModal({
   summary,
   fullSeries,
+  strava,
   onClose,
 }: {
   summary: SessionSummary | null;
   /** full-resolution (1 Hz) series for the .FIT export */
   fullSeries: SeriesPoint[];
+  strava?: {
+    connected: boolean;
+    post: (summary: SessionSummary, series: SeriesPoint[], opts: { name: string; description: string }) => Promise<PostResult>;
+  };
   onClose: () => void;
 }) {
   return (
@@ -101,7 +108,11 @@ export function SummaryModal({
                 </>
               )}
 
-              <div className="flex gap-2 mt-6">
+              {strava?.connected && (
+                <StravaPost summary={summary} series={fullSeries.length ? fullSeries : summary.series} post={strava.post} />
+              )}
+
+              <div className="flex gap-2 mt-4">
                 <button
                   onClick={() => downloadFit(summary, fullSeries.length ? fullSeries : summary.series)}
                   className="btn-ghost flex-1 h-11 text-sm"
@@ -112,13 +123,86 @@ export function SummaryModal({
                 <button onClick={onClose} className="btn-volt flex-1 h-11 text-sm">Done</button>
               </div>
               <p className="text-[10px] text-[var(--color-ink-faint)] mt-2 text-center">
-                .FIT includes 1 Hz heart rate, laps per interval, and session totals — uploads to Strava, Garmin Connect &amp; co.
+                .FIT includes 1 Hz heart rate + cadence, laps per interval, and session totals.
               </p>
             </motion.div>
           </motion.div>
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+function StravaPost({
+  summary,
+  series,
+  post,
+}: {
+  summary: SessionSummary;
+  series: SeriesPoint[];
+  post: (s: SessionSummary, ser: SeriesPoint[], o: { name: string; description: string }) => Promise<PostResult>;
+}) {
+  const defaultName =
+    summary.mode === "workout" ? summary.planTitle ?? "RoxLive workout" : summary.mode === "hyrox" ? "RoxLive HYROX session" : "RoxLive session";
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState(defaultName);
+  const [desc, setDesc] = useState("Recorded with RoxLive");
+  const [state, setState] = useState<"idle" | "posting" | "done" | "error">("idle");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const go = async () => {
+    setState("posting");
+    setMsg(null);
+    const res = await post(summary, series, { name, description: desc });
+    if (res.ok) {
+      setState("done");
+      setMsg(`Uploaded — Strava is processing it${res.status ? ` (${res.status})` : ""}.`);
+    } else {
+      setState("error");
+      setMsg(res.error || "Upload failed.");
+    }
+  };
+
+  if (state === "done") {
+    return (
+      <div className="card p-3 mt-4 flex items-center gap-2" style={{ borderColor: "rgba(252,76,2,0.4)" }}>
+        <span className="w-2 h-2 rounded-full bg-[#fc4c02]" />
+        <span className="text-[12px] text-[var(--color-ink-dim)]">{msg}</span>
+      </div>
+    );
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full h-11 mt-4 text-sm rounded-xl font-semibold flex items-center justify-center gap-2"
+        style={{ background: "#fc4c02", color: "white" }}
+      >
+        Post to Strava
+      </button>
+    );
+  }
+
+  return (
+    <div className="card p-4 mt-4" style={{ borderColor: "rgba(252,76,2,0.4)" }}>
+      <div className="card-title mb-2" style={{ color: "#fc4c02" }}>Post to Strava — confirm</div>
+      <input value={name} onChange={(e) => setName(e.target.value)} className="inp mb-2" placeholder="Activity name" />
+      <input value={desc} onChange={(e) => setDesc(e.target.value)} className="inp" placeholder="Description" />
+      {msg && state === "error" && <div className="text-[11px] text-[var(--color-red)] mt-2">{msg}</div>}
+      <div className="flex gap-2 mt-3">
+        <button
+          onClick={go}
+          disabled={state === "posting"}
+          className="flex-1 h-10 text-sm rounded-xl font-semibold disabled:opacity-50"
+          style={{ background: "#fc4c02", color: "white" }}
+        >
+          {state === "posting" ? "Uploading…" : "Confirm & post"}
+        </button>
+        <button onClick={() => setOpen(false)} disabled={state === "posting"} className="btn-ghost px-4 h-10 text-sm">Cancel</button>
+      </div>
+      <p className="text-[10px] text-[var(--color-ink-faint)] mt-2">Uploads this session's .FIT to your Strava account. Nothing posts until you confirm.</p>
+    </div>
   );
 }
 

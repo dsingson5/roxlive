@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { AthleteProfile } from "../types";
 import { zoneBounds } from "../lib/zones";
 import { VISION_MODELS } from "../lib/vision";
+import type { StravaConfig } from "../lib/strava";
 
 export function SettingsDrawer({
   open,
@@ -11,6 +12,7 @@ export function SettingsDrawer({
   onApiKeyChange,
   model,
   onModelChange,
+  strava,
   onClose,
   onSave,
 }: {
@@ -20,6 +22,14 @@ export function SettingsDrawer({
   onApiKeyChange: (k: string) => void;
   model: string;
   onModelChange: (m: string) => void;
+  strava: {
+    config: StravaConfig;
+    connected: boolean;
+    athlete: string | null;
+    onSaveConfig: (c: StravaConfig) => void;
+    onConnect: () => void;
+    onDisconnect: () => void;
+  };
   onClose: () => void;
   onSave: (p: AthleteProfile) => void;
 }) {
@@ -102,6 +112,9 @@ export function SettingsDrawer({
                 )}
               </div>
 
+              {/* Strava */}
+              <StravaSection strava={strava} />
+
               {/* zone preview */}
               <div>
                 <div className="card-title mb-2">Derived HR Zones</div>
@@ -131,6 +144,66 @@ export function SettingsDrawer({
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+function StravaSection({
+  strava: s,
+}: {
+  strava: {
+    config: StravaConfig;
+    connected: boolean;
+    athlete: string | null;
+    onSaveConfig: (c: StravaConfig) => void;
+    onConnect: () => void;
+    onDisconnect: () => void;
+  };
+}) {
+  const [clientId, setClientId] = useState(s.config.clientId);
+  const [workerUrl, setWorkerUrl] = useState(s.config.workerUrl);
+  const dirty = clientId !== s.config.clientId || workerUrl !== s.config.workerUrl;
+  const configured = clientId.trim() && workerUrl.trim();
+
+  return (
+    <div>
+      <div className="card-title mb-2">Strava</div>
+      {s.connected ? (
+        <div className="rounded-lg bg-white/[0.03] border border-[var(--color-line)] p-3">
+          <div className="flex items-center gap-2 text-[13px]">
+            <span className="w-2 h-2 rounded-full bg-[#fc4c02]" style={{ boxShadow: "0 0 8px #fc4c02" }} />
+            <span className="text-[var(--color-ink)]">Connected{s.athlete ? ` as ${s.athlete}` : ""}</span>
+          </div>
+          <div className="text-[11px] text-[var(--color-ink-faint)] mt-1">Finished sessions get a "Post to Strava" button (you confirm each upload).</div>
+          <button onClick={s.onDisconnect} className="btn-ghost h-8 px-3 mt-2 text-[12px]" style={{ color: "var(--color-red)", borderColor: "rgba(255,77,77,0.3)" }}>Disconnect</button>
+        </div>
+      ) : (
+        <>
+          <p className="text-[11px] text-[var(--color-ink-faint)] leading-relaxed mb-2">
+            One-time setup needed (Strava app + free Cloudflare Worker) — see strava/README.md in the repo. Paste your Client ID and Worker URL, save, then connect.
+          </p>
+          <input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Strava Client ID" className="inp" autoComplete="off" />
+          <input value={workerUrl} onChange={(e) => setWorkerUrl(e.target.value)} placeholder="Worker URL (https://…workers.dev)" className="inp mt-2" autoComplete="off" />
+          <div className="flex gap-2 mt-2">
+            <button
+              onClick={() => s.onSaveConfig({ clientId, workerUrl })}
+              disabled={!dirty || !configured}
+              className="btn-ghost h-9 px-4 text-[13px] disabled:opacity-40"
+            >
+              Save
+            </button>
+            <button
+              onClick={s.onConnect}
+              disabled={!configured || dirty}
+              title={dirty ? "Save first" : ""}
+              className="h-9 px-4 text-[13px] rounded-xl font-semibold disabled:opacity-40"
+              style={{ background: "#fc4c02", color: "white" }}
+            >
+              Connect Strava
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
