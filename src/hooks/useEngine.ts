@@ -34,6 +34,8 @@ const emptySnapshot = (profile: AthleteProfile): MetricsSnapshot => ({
   speedMps: null,
   paceSecPerKm: null,
   distanceM: 0,
+  cadence: null,
+  bodyTempC: null,
   intervalState: "idle",
   intervalCount: 0,
   stateElapsedSec: 0,
@@ -121,28 +123,35 @@ export function useEngine() {
 
   const onHR = useCallback((s: HRSample) => engineRef.current.ingestHR(s), []);
   const onPace = useCallback((s: PaceSample) => engineRef.current.ingestPace(s), []);
+  const onCadence = useCallback((t: number, spm: number) => engineRef.current.ingestCadence(t, spm), []);
+  const onTemp = useCallback((t: number, c: number) => engineRef.current.ingestTemp(t, c), []);
 
   const startDemo = useCallback(
     (opts?: { targetHrFn?: (elapsedSec: number) => number | null }) => {
       setError(null);
       engineRef.current.reset();
       engineRef.current.start(now());
-      const sim = new RaceSimulator(profile, onHR, onPace, { targetHrFn: opts?.targetHrFn });
+      const sim = new RaceSimulator(profile, onHR, onPace, {
+        targetHrFn: opts?.targetHrFn,
+        onCadence,
+        onTemp,
+      });
       sim.start();
       simRef.current = sim;
       setMode("demo");
       setDevice({
         id: "sim",
-        name: "Simulated HRM-Pro",
+        name: "Simulated Sensor",
         status: "connected",
         battery: 88,
         primary: true,
         lastHr: null,
         hasRR: true,
+        simulated: true,
       });
       startLoop();
     },
-    [profile, onHR, onPace, startLoop]
+    [profile, onHR, onPace, onCadence, onTemp, startLoop]
   );
 
   const connect = useCallback(async () => {
@@ -155,7 +164,9 @@ export function useEngine() {
     const ble = new HeartRateBLE(
       (s) => onHR(s),
       (d) => setDevice(d),
-      (msg) => setError(msg)
+      (msg) => setError(msg),
+      (t, spm) => onCadence(t, spm),
+      (t, c) => onTemp(t, c)
     );
     bleRef.current = ble;
     await ble.connect();
@@ -177,7 +188,7 @@ export function useEngine() {
         { enableHighAccuracy: true, maximumAge: 1000 }
       );
     }
-  }, [onHR, onPace, startLoop, clearGps]);
+  }, [onHR, onPace, onCadence, onTemp, startLoop, clearGps]);
 
   const stop = useCallback(() => {
     simRef.current?.stop();

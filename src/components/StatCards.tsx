@@ -117,20 +117,36 @@ export function IntervalCard({ snap }: { snap: MetricsSnapshot }) {
   );
 }
 
-/* ---- Pace / distance ---- */
+/* ---- Pace / cadence / distance ---- */
 export function PaceCard({ snap }: { snap: MetricsSnapshot }) {
+  const hasCadence = snap.cadence != null;
   return (
-    <Card title="Pace · Distance">
+    <Card title={hasCadence ? "Pace · Cadence" : "Pace · Distance"}>
       <div className="flex items-end justify-between">
         <div>
           <div className="num text-3xl text-[var(--color-ink)]">{fmtPace(snap.paceSecPerKm)}<span className="text-sm text-[var(--color-ink-faint)] ml-1">/km</span></div>
           <div className="text-[10px] tracking-[0.15em] text-[var(--color-ink-faint)] mt-0.5">CURRENT PACE</div>
         </div>
         <div className="text-right">
-          <div className="num text-2xl text-[var(--color-volt)]">{fmtDist(snap.distanceM)}</div>
-          <div className="text-[10px] tracking-[0.15em] text-[var(--color-ink-faint)]">DISTANCE</div>
+          {hasCadence ? (
+            <>
+              <div className="num text-2xl text-[var(--color-cyan)]">{Math.round(snap.cadence as number)}<span className="text-xs text-[var(--color-ink-faint)] ml-1">spm</span></div>
+              <div className="text-[10px] tracking-[0.15em] text-[var(--color-ink-faint)]">CADENCE</div>
+            </>
+          ) : (
+            <>
+              <div className="num text-2xl text-[var(--color-volt)]">{fmtDist(snap.distanceM)}</div>
+              <div className="text-[10px] tracking-[0.15em] text-[var(--color-ink-faint)]">DISTANCE</div>
+            </>
+          )}
         </div>
       </div>
+      {hasCadence && (
+        <div className="mt-2 pt-2 border-t border-[var(--color-line)] flex items-center justify-between text-[11px]">
+          <span className="text-[var(--color-ink-faint)] tracking-[0.12em]">DISTANCE</span>
+          <span className="num text-[var(--color-volt)]">{fmtDist(snap.distanceM)}</span>
+        </div>
+      )}
     </Card>
   );
 }

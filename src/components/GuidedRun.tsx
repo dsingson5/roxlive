@@ -11,16 +11,23 @@ export function GuidedRun({
   profile,
   hr,
   sourceLive,
+  simulated,
   onStart,
+  onConnect,
+  onSimulate,
   onEdit,
 }: {
   state: RunnerState;
   plan: WorkoutPlan;
   profile: AthleteProfile;
   hr: number | null;
-  /** true when a HR source (sensor or demo) is already streaming */
+  /** true when a HR source (sensor or simulator) is already streaming */
   sourceLive: boolean;
+  /** true when the live source is the simulator (vs a real sensor) */
+  simulated: boolean;
   onStart: () => void;
+  onConnect: () => void;
+  onSimulate: () => void;
   onEdit: () => void;
 }) {
   const iv = state.interval;
@@ -130,17 +137,31 @@ export function GuidedRun({
                 <span className="text-[var(--color-ink)] font-semibold">{plan.title}</span>
                 <span className="mono text-[11px] text-[var(--color-ink-faint)]"> · {plan.intervals.length} intervals</span>
               </div>
-              {sourceLive && hr != null && (
-                <div className="mono text-[11px] text-[var(--color-mint)] mt-1.5">♥ {hr} bpm — signal live</div>
+
+              {sourceLive ? (
+                <>
+                  {hr != null && (
+                    <div className="mono text-[11px] mt-1.5" style={{ color: simulated ? "var(--color-cyan)" : "var(--color-mint)" }}>
+                      ♥ {hr} bpm — {simulated ? "simulated signal" : "sensor live"}
+                    </div>
+                  )}
+                  <button onClick={onStart} className="btn-volt px-10 h-12 text-base mt-4">▶ START WORKOUT</button>
+                  <div className="text-[11px] text-[var(--color-ink-faint)] mt-3 max-w-[300px] mx-auto leading-relaxed">
+                    Begins the lead-in countdown and voice coaching.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-[12px] text-[var(--color-ink-faint)] mt-2 mb-4">Choose your heart-rate source to begin.</div>
+                  <div className="flex items-center justify-center gap-2">
+                    <button onClick={onConnect} className="btn-volt px-5 h-11 text-sm">Connect Sensor</button>
+                    <button onClick={onSimulate} className="btn-ghost px-5 h-11 text-sm">Use Simulator</button>
+                  </div>
+                  <div className="text-[11px] text-[var(--color-ink-faint)] mt-3 max-w-[300px] mx-auto leading-relaxed">
+                    A connected strap is always used for real metrics; the simulator is only for trying it out.
+                  </div>
+                </>
               )}
-              <button onClick={onStart} className="btn-volt px-10 h-12 text-base mt-4">
-                ▶ START WORKOUT
-              </button>
-              <div className="text-[11px] text-[var(--color-ink-faint)] mt-3 max-w-[300px] mx-auto leading-relaxed">
-                {sourceLive
-                  ? "Begins the lead-in countdown and voice coaching."
-                  : "Starts with simulated HR — hit Connect first to use your strap."}
-              </div>
             </div>
           </motion.div>
         )}

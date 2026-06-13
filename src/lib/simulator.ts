@@ -44,7 +44,14 @@ export interface SimOptions {
    * Return a target bpm, or null to fall back to the HYROX physiology.
    */
   targetHrFn?: (elapsedSec: number) => number | null;
+  /** receive simulated running cadence (steps/min) */
+  onCadence?: (t: number, spm: number) => void;
+  /** receive simulated core temperature (°C) */
+  onTemp?: (t: number, c: number) => void;
 }
+
+type CadenceCb = (t: number, spm: number) => void;
+type TempCb = (t: number, c: number) => void;
 
 export class RaceSimulator {
   private race = buildRace();
@@ -62,7 +69,11 @@ export class RaceSimulator {
   private artifactRate: number;
   private segmentSpeedup: number;
   private targetHrFn?: (elapsedSec: number) => number | null;
+  private onCadence?: CadenceCb;
+  private onTemp?: TempCb;
   private startedAt = 0; // real ms when start() was called (for plan timing)
+  private lastIntensity = 0.6; // %HRmax of the current effort (for cadence/temp)
+  private bodyTemp = 37.0; // core temp °C, drifts up with effort
 
   constructor(
     private profile: AthleteProfile,
@@ -73,6 +84,8 @@ export class RaceSimulator {
     this.artifactRate = opts.artifactRate ?? 0.012;
     this.segmentSpeedup = opts.segmentSpeedup ?? 1;
     this.targetHrFn = opts.targetHrFn;
+    this.onCadence = opts.onCadence;
+    this.onTemp = opts.onTemp;
     this.hr = profile.restHr + 70; // start warmed-up (~120-ish)
     this.targetHr = this.hr;
   }
@@ -168,6 +181,8 @@ export class RaceSimulator {
       intensity = phys.intensity;
     }
 
+    this.lastIntensity = intensity;
+
     // First-order HR response toward target.
     this.hr += (this.targetHr - this.hr) * 0.06;
     const hr = Math.max(60, Math.min(this.profile.maxHr + 4, this.hr));
@@ -255,14 +270,37 @@ export class RaceSimulator {
 
   private emitPace(): void {
     if (!this.running) return;
+    const t = performance.timeOrigin + performance.now();
+
+    let speed: number;
     if (this.targetHrFn) {
       // Workout mode: HR-target driven, no GPS pace.
-      this.onPace({ t: performance.timeOrigin + performance.now(), speedMps: 0, source: "sim" });
-      return;
+      speed = 0;
+      this.onPace({ t, speedMps: 0, source: "sim" });
+    } else {
+      const phys = this.physAt(this.nowMs / 1000);
+      const jitter = phys.speed > 1 ? (Math.random() - 0.5) * 0.3 : 0;
+      speed = Math.max(0, phys.speed + jitter);
+      this.onPace({ t, speedMps: speed, source: "sim" });
     }
-    const phys = this.physAt(this.nowMs / 1000);
-    const jitter = phys.speed > 1 ? (Math.random() - 0.5) * 0.3 : 0;
-    this.onPace({ t: performance.timeOrigin + performance.now(), speedMps: Math.max(0, phys.speed + jitter), source: "sim" });
+
+    const I = this.lastIntensity;
+
+    // Cadence: from running speed when moving, else effort-scaled (steps/min).
+    if (this.onCadence) {
+      let spm: number;
+      if (speed > 1.4) spm = 162 + (speed - 3) * 7; // running
+      else spm = 150 + I * 42; // HR-target intervals / station turnover
+      spm += (Math.random() - 0.5) * 4;
+      this.onCadence(t, Math.round(Math.max(60, Math.min(200, spm))));
+    }
+
+    // Core temperature: slow thermal drift toward an effort-dependent target.
+    if (this.onTemp) {
+      const target = 37.0 + 1.7 * I;
+      this.bodyTemp += (target - this.bodyTemp) * 0.012;
+      this.onTemp(t, Math.round((this.bodyTemp + (Math.random() - 0.5) * 0.02) * 10) / 10);
+    }
   }
 
   setArtifactRate(r: number) {

@@ -18,6 +18,7 @@ for (let i = 0; i < durSec; i++) {
     speedMps: 2.8 + 0.3 * Math.sin(i / 30),
     brpm: null,
     zone: 3,
+    cadence: Math.round(170 + 6 * Math.sin(i / 20)),
   });
 }
 const summary = {

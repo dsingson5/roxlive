@@ -39,8 +39,9 @@ export function useWorkoutRunner(args: {
 }) {
   const { plan, profile, voice, active, elapsedSec, hr } = args;
 
-  const coachRef = useRef<VoiceCoach>(new VoiceCoach(voice));
-  useEffect(() => coachRef.current.setSettings(voice), [voice]);
+  const coachRef = useRef<VoiceCoach | null>(null);
+  if (coachRef.current === null) coachRef.current = new VoiceCoach(voice);
+  useEffect(() => coachRef.current!.setSettings(voice), [voice]);
 
   const ends = useMemo(() => (plan ? cumulativeEnds(plan) : []), [plan]);
   const leadIn = voice.leadInSec;
@@ -68,7 +69,7 @@ export function useWorkoutRunner(args: {
       setAdherence({ pct: null, per: [] });
       planId.current = plan?.id ?? null;
     }
-    if (!active && prevActive.current) coachRef.current.cancel();
+    if (!active && prevActive.current) coachRef.current!.cancel();
     prevActive.current = active;
   }, [active, plan, elapsedSec]);
 
@@ -127,7 +128,7 @@ export function useWorkoutRunner(args: {
   // Voice cues (edge-triggered via the fired set).
   useEffect(() => {
     if (!active || !plan) return;
-    const coach = coachRef.current;
+    const coach = coachRef.current!;
     const once = (token: string, fn: () => void) => {
       if (fired.current.has(token)) return;
       fired.current.add(token);
@@ -210,7 +211,7 @@ export function useWorkoutRunner(args: {
     }
   }, [elapsedSec, active, state, hr]);
 
-  return { coach: coachRef.current, state };
+  return { coach: coachRef.current!, state };
 }
 
 function labelFor(iv: WorkoutInterval, profile: AthleteProfile): string {

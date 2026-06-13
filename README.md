@@ -85,13 +85,36 @@ npm run preview  # serve the production build
 Deployment: GitHub Pages serves `main:/docs` — rebuild and push to update the
 live site.
 
+## Sources: real sensor first, simulator opt-in
+
+**Connect** pairs a real BLE strap and that data is always used as-is. **Simulate**
+is an explicit, clearly-labelled choice (a "SIM" badge shows on the device chip)
+for trying the app with no hardware — it never overrides a connected sensor.
+Beyond HR + R-R, the app also reads **running cadence** (RSC 0x1814) and
+**body/core temperature** (Health Thermometer 0x1809) from a sensor when
+available, and shows pace (from GPS) + cadence + temperature live. The
+simulator produces all of these too.
+
+## Countdown coaching
+
+In the final **3·2·1 seconds** of any interval (workout) or segment (HYROX) a
+huge on-screen countdown appears with a spoken cue, so you know a transition is
+coming without looking down.
+
+## History
+
+Every finished session is saved on-device and listed in the **History** panel
+(clock icon, top bar): mode, date, duration, avg/max HR, zone split, adherence,
+and an HR trace. Open any past session for the full summary — including .FIT
+re-export.
+
 ## Export
 
 Every finished session can be exported as a **Garmin .FIT activity file**
-(1 Hz heart rate records, one lap per interval/station, session totals) —
-upload it to Garmin Connect, Strava, TrainingPeaks, intervals.icu, etc. The
-encoder is dependency-free ([src/lib/fit.ts](src/lib/fit.ts)) and validated by
-[tools/verify-fit.mjs](tools/verify-fit.mjs).
+(1 Hz heart rate + cadence records, one lap per interval/station, session
+totals) — upload it to Garmin Connect, Strava, TrainingPeaks, intervals.icu,
+etc. The encoder is dependency-free ([src/lib/fit.ts](src/lib/fit.ts)) and
+validated by [tools/verify-fit.mjs](tools/verify-fit.mjs).
 
 ## How it maps to the report
 

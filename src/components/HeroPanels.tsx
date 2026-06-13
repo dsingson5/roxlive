@@ -54,10 +54,13 @@ export function HeroHR({ snap, profile }: { snap: MetricsSnapshot; profile: Athl
         </div>
       </RadialGauge>
 
-      <div className="grid grid-cols-3 gap-2 w-full mt-3">
+      <div className={`grid ${snap.bodyTempC != null ? "grid-cols-4" : "grid-cols-3"} gap-2 w-full mt-3`}>
         <MiniStat label="AVG" value={fmtNum(snap.hrAvg)} />
         <MiniStat label="MAX" value={fmtNum(snap.hrMax)} />
         <MiniStat label="KCAL" value={fmtNum(snap.kcal)} />
+        {snap.bodyTempC != null && (
+          <MiniStat label="°C TEMP" value={snap.bodyTempC.toFixed(1)} accent="var(--color-amber)" />
+        )}
       </div>
     </div>
   );

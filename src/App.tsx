@@ -16,6 +16,8 @@ import { buildRace } from "./data/hyrox";
 import { selfTestDFA } from "./lib/dfa";
 import { cumulativeEnds, loadPlan, resolveBand, savePlan } from "./lib/workout";
 import { VISION_MODELS } from "./lib/vision";
+import { VoiceCoach } from "./lib/voice";
+import { addToHistory, clearHistory, deleteFromHistory, loadHistory } from "./lib/history";
 import { TopBar } from "./components/TopBar";
 import { HeroHR, DfaGauge } from "./components/HeroPanels";
 import { LiveChart } from "./components/LiveChart";
@@ -35,6 +37,8 @@ import { WorkoutRail } from "./components/WorkoutRail";
 import { WorkoutBuilder } from "./components/WorkoutBuilder";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { SummaryModal } from "./components/SummaryModal";
+import { HistoryModal } from "./components/HistoryModal";
+import { CountdownOverlay } from "./components/CountdownOverlay";
 
 export default function App() {
   const eng = useEngine();
@@ -44,6 +48,11 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [manualFocus, setManualFocus] = useState<number | null>(null);
+
+  // Workout history (persisted locally).
+  const [history, setHistory] = useState<SessionSummary[]>(() => loadHistory());
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyDetail, setHistoryDetail] = useState<SessionSummary | null>(null);
 
   // Workout-mode state (persisted locally).
   const [plan, setPlan] = useState<WorkoutPlan | null>(() => loadPlan());
@@ -62,6 +71,14 @@ export default function App() {
   const anchorRef = useRef<number | null>(null);
   const planFnRef = useRef<((tSec: number) => number | null) | null>(null);
   const fullSeriesRef = useRef<SeriesPoint[]>([]);
+
+  // HYROX voice coach (separate from the workout runner's coach).
+  // Lazy-init so the constructor runs once, not on every render.
+  const hyroxCoachRef = useRef<VoiceCoach | null>(null);
+  if (hyroxCoachRef.current === null) hyroxCoachRef.current = new VoiceCoach(voice);
+  const hyroxCoach = hyroxCoachRef as React.MutableRefObject<VoiceCoach>;
+  const hyroxFired = useRef<Set<string>>(new Set());
+  useEffect(() => hyroxCoach.current.setSettings(voice), [voice, hyroxCoach]);
 
   useEffect(() => {
     planFnRef.current = plan ? planTargetHr(plan, voice.leadInSec, profile) : null;
@@ -117,19 +134,29 @@ export default function App() {
 
   // Demo / Connect just bring a HR source online. In workout mode nothing is
   // guided yet — the plan waits for the explicit START press.
+  const armHyroxVoice = () => {
+    // user gesture → unlock speech for HYROX countdowns; reset per-run cues
+    hyroxFired.current = new Set();
+    if (raceMode === "hyrox") hyroxCoach.current.prime();
+  };
   const handleDemo = () => {
+    armHyroxVoice();
     if (raceMode === "workout" && plan) eng.startDemo({ targetHrFn: simTargetFn });
     else eng.startDemo();
   };
   const handleConnect = () => {
+    armHyroxVoice();
     void eng.connect();
   };
 
-  /** The explicit START press — the only thing that begins the guided plan. */
+  /**
+   * The explicit START press — the only thing that begins the guided plan.
+   * A source (real sensor or simulator) must already be live; we never
+   * silently start the simulator here.
+   */
   const handleStartWorkout = () => {
-    if (!plan) return;
+    if (!plan || eng.mode === "idle") return;
     runner.coach.prime(); // user gesture: unlock speech synthesis + audio
-    if (eng.mode === "idle") eng.startDemo({ targetHrFn: simTargetFn });
     const t = performance.timeOrigin + performance.now();
     anchorRef.current = t;
     setWorkoutAnchor(t);
@@ -137,6 +164,7 @@ export default function App() {
 
   const handleModeChange = (m: "free" | "hyrox" | "workout") => {
     setRaceMode(m);
+    hyroxFired.current = new Set(); // avoid stale countdown tokens across modes
     if (m !== "workout") clearAnchor();
     if (m === "workout" && !plan) setBuilderOpen(true);
   };
@@ -186,6 +214,49 @@ export default function App() {
   const isFocusCurrent = focusIndex === currentIndex;
   const focusSeg = segments[focusIndex];
 
+  // ---- HYROX segment-end countdown + voice -------------------------------
+  const hyroxRemaining = useMemo(() => {
+    if (raceMode !== "hyrox" || eng.mode === "idle") return null;
+    const end = cum[currentIndex];
+    const r = end - snap.elapsedSec;
+    return r > 0 && r <= 60 ? r : null;
+  }, [raceMode, eng.mode, cum, currentIndex, snap.elapsedSec]);
+
+  useEffect(() => {
+    if (hyroxRemaining == null) return;
+    const n = Math.ceil(hyroxRemaining);
+    if (n >= 1 && n <= 3) {
+      const token = `hx:${currentIndex}:${n}`;
+      if (!hyroxFired.current.has(token)) {
+        hyroxFired.current.add(token);
+        hyroxCoach.current.say(String(n));
+        hyroxCoach.current.beep(n === 1 ? 660 : 760, 90);
+        if (n === 1) {
+          const next = segments[currentIndex + 1];
+          if (next) hyroxCoach.current.say(`Next, ${next.label}.`);
+        }
+      }
+    }
+  }, [hyroxRemaining, currentIndex, segments]);
+
+  // Unified huge-countdown driver for the overlay.
+  const countdown = useMemo<{ seconds: number | null; label?: string }>(() => {
+    if (raceMode === "workout" && runner.state.phase === "running") {
+      const n = Math.ceil(runner.state.remainingSec);
+      if (n >= 1 && n <= 3) {
+        return { seconds: n, label: runner.state.nextInterval ? `→ ${runner.state.nextInterval.name}` : "Final interval" };
+      }
+    }
+    if (raceMode === "hyrox" && hyroxRemaining != null) {
+      const n = Math.ceil(hyroxRemaining);
+      if (n >= 1 && n <= 3) {
+        const next = segments[currentIndex + 1];
+        return { seconds: n, label: next ? `→ ${next.label}` : "Finish line" };
+      }
+    }
+    return { seconds: null };
+  }, [raceMode, runner.state, hyroxRemaining, segments, currentIndex]);
+
   // Reset transient race UI when a session ends/resets.
   useEffect(() => {
     if (eng.mode === "idle") setManualFocus(null);
@@ -204,6 +275,11 @@ export default function App() {
     fullSeriesRef.current = [...series];
     eng.stop();
     clearAnchor();
+    // Persist to history only if the session had real activity.
+    if (s.durationSec >= 5 && (s.avgHr != null || s.distanceM > 0)) {
+      addToHistory(s);
+      setHistory(loadHistory());
+    }
     setSummary(s);
   };
 
@@ -221,6 +297,7 @@ export default function App() {
         onDemo={handleDemo}
         onStop={handleStop}
         onSettings={() => setSettingsOpen(true)}
+        onHistory={() => setHistoryOpen(true)}
         supported={eng.supported}
       />
 
@@ -253,7 +330,10 @@ export default function App() {
                   profile={profile}
                   hr={snap.hr}
                   sourceLive={eng.mode !== "idle"}
+                  simulated={eng.mode === "demo"}
                   onStart={handleStartWorkout}
+                  onConnect={handleConnect}
+                  onSimulate={handleDemo}
                   onEdit={() => setBuilderOpen(true)}
                 />
               ) : (
@@ -324,6 +404,7 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         onSave={eng.setProfile}
       />
+      {/* Live post-session summary (resets the engine on close). */}
       <SummaryModal
         summary={summary}
         fullSeries={fullSeriesRef.current}
@@ -332,6 +413,25 @@ export default function App() {
           eng.reset();
         }}
       />
+
+      {/* Read-only detail of a past session from history. */}
+      <SummaryModal
+        summary={historyDetail}
+        fullSeries={historyDetail?.series ?? []}
+        onClose={() => setHistoryDetail(null)}
+      />
+
+      <HistoryModal
+        open={historyOpen}
+        sessions={history}
+        onClose={() => setHistoryOpen(false)}
+        onOpen={(s) => setHistoryDetail(s)}
+        onDelete={(id) => setHistory(deleteFromHistory(id))}
+        onClear={() => setHistory(clearHistory())}
+      />
+
+      {/* Huge 3-2-1 countdown for the end of the current interval / segment. */}
+      <CountdownOverlay seconds={countdown.seconds} label={countdown.label} />
     </div>
   );
 }
@@ -352,15 +452,15 @@ function WelcomeBanner({ onDemo, onConnect, supported }: { onDemo: () => void; o
         <p className="text-[var(--color-ink-dim)] mt-3 leading-relaxed">
           RoxLive turns a Bluetooth heart-rate strap into a sports-science lab — live <span className="text-[var(--color-cyan)]">DFA-α1</span> thresholds,
           aerobic decoupling, RSA breathing rate, HR-zone segmentation and a full HYROX race guide. Pair a Polar H10 / Garmin
-          HRM-Pro, or hit <span className="text-[var(--color-volt)]">Demo</span> to watch a simulated race come alive.
+          HRM-Pro for real metrics, or <span className="text-[var(--color-volt)]">simulate</span> to explore it with no hardware.
         </p>
         <div className="flex flex-wrap gap-3 mt-5">
-          <button onClick={onDemo} className="btn-volt px-6 h-11 text-sm">▶ Launch Demo Race</button>
-          <button onClick={onConnect} className="btn-ghost px-6 h-11 text-sm">Connect HR Sensor</button>
+          <button onClick={onConnect} className="btn-volt px-6 h-11 text-sm">Connect HR Sensor</button>
+          <button onClick={onDemo} className="btn-ghost px-6 h-11 text-sm">▶ Simulate</button>
         </div>
         {!supported && (
           <p className="text-[11px] text-[var(--color-ink-faint)] mt-3">
-            Live pairing needs Web Bluetooth (Chrome / Edge on desktop or Android). The demo works everywhere.
+            Live pairing needs Web Bluetooth (Chrome / Edge on desktop or Android). The simulator works everywhere.
           </p>
         )}
       </div>

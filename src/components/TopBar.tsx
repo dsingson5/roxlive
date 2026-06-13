@@ -13,6 +13,7 @@ export function TopBar({
   onDemo,
   onStop,
   onSettings,
+  onHistory,
   supported,
 }: {
   snap: MetricsSnapshot;
@@ -24,6 +25,7 @@ export function TopBar({
   onDemo: () => void;
   onStop: () => void;
   onSettings: () => void;
+  onHistory: () => void;
   supported: boolean;
 }) {
   const live = mode !== "idle";
@@ -65,15 +67,15 @@ export function TopBar({
         <div className="flex items-center gap-2">
           {!live ? (
             <>
-              <button onClick={onDemo} className="btn-volt px-4 h-9 text-sm flex items-center gap-1.5">
-                <PlayIcon /> Demo
-              </button>
               <button
                 onClick={onConnect}
-                className="btn-ghost px-4 h-9 text-sm flex items-center gap-1.5"
+                className="btn-volt px-4 h-9 text-sm flex items-center gap-1.5"
                 title={supported ? "Pair a Bluetooth HR sensor" : "Web Bluetooth unavailable in this browser"}
               >
-                <BtIcon /> <span className="hidden sm:inline">Connect</span>
+                <BtIcon /> Connect
+              </button>
+              <button onClick={onDemo} className="btn-ghost px-4 h-9 text-sm flex items-center gap-1.5" title="Run with simulated heart rate — no sensor needed">
+                <PlayIcon /> <span className="hidden sm:inline">Simulate</span>
               </button>
             </>
           ) : (
@@ -81,6 +83,9 @@ export function TopBar({
               <StopIcon /> Stop
             </button>
           )}
+          <button onClick={onHistory} className="btn-ghost w-9 h-9 grid place-items-center" title="Workout history">
+            <HistoryIcon />
+          </button>
           <button onClick={onSettings} className="btn-ghost w-9 h-9 grid place-items-center" title="Settings">
             <GearIcon />
           </button>
@@ -132,13 +137,23 @@ function DeviceChip({ device }: { device: DeviceInfo }) {
   };
   const c = colorMap[device.status];
   return (
-    <div className="hidden sm:flex items-center gap-2 px-3 h-9 rounded-xl bg-white/[0.03] border border-[var(--color-line)]">
+    <div
+      className="hidden sm:flex items-center gap-2 px-3 h-9 rounded-xl bg-white/[0.03] border"
+      style={{ borderColor: device.simulated ? "rgba(56,225,255,0.35)" : "var(--color-line)" }}
+    >
       <span className="w-2 h-2 rounded-full" style={{ background: c, boxShadow: `0 0 8px ${c}` }} />
       <div className="leading-none">
-        <div className="text-[11px] font-semibold text-[var(--color-ink)] max-w-[120px] truncate">{device.name}</div>
+        <div className="text-[11px] font-semibold text-[var(--color-ink)] max-w-[140px] truncate flex items-center gap-1.5">
+          {device.name}
+          {device.simulated && (
+            <span className="text-[8px] tracking-wider px-1 py-0.5 rounded" style={{ color: "var(--color-cyan)", background: "rgba(56,225,255,0.12)" }}>SIM</span>
+          )}
+        </div>
         <div className="text-[9px] mono text-[var(--color-ink-faint)] flex items-center gap-1.5">
-          <span>{device.status}</span>
+          <span>{device.simulated ? "simulated" : device.status}</span>
           {device.hasRR && <span className="text-[var(--color-cyan)]">R-R</span>}
+          {device.hasCadence && <span className="text-[var(--color-mint)]">CAD</span>}
+          {device.hasTemp && <span className="text-[var(--color-amber)]">TEMP</span>}
           {device.battery !== null && <span>· {device.battery}%</span>}
         </div>
       </div>
@@ -160,3 +175,4 @@ const PlayIcon = () => (<svg width="13" height="13" viewBox="0 0 24 24" fill="cu
 const StopIcon = () => (<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>);
 const BtIcon = () => (<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 7 10 10-5 5V2l5 5L7 17" /></svg>);
 const GearIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>);
+const HistoryIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v5h5" /><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" /><path d="M12 7v5l4 2" /></svg>);

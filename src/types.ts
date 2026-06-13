@@ -125,6 +125,10 @@ export interface MetricsSnapshot {
   /** sec per km, null when speed < 0.45 m/s */
   paceSecPerKm: number | null;
   distanceM: number;
+  /** running cadence (steps/min), null when no cadence source / stale */
+  cadence: number | null;
+  /** core/body temperature °C, null when no thermometer / stale */
+  bodyTempC: number | null;
 
   intervalState: IntervalState;
   /** completed work intervals */
@@ -143,6 +147,7 @@ export interface SeriesPoint {
   speedMps: number | null;
   brpm: number | null;
   zone: number | null;
+  cadence: number | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -333,4 +338,9 @@ export interface DeviceInfo {
   lastHr: number | null;
   /** true if any notification so far contained R-R intervals */
   hasRR: boolean;
+  /** true for the built-in simulator (vs a real BLE sensor) */
+  simulated?: boolean;
+  /** extra services discovered on a real sensor */
+  hasCadence?: boolean;
+  hasTemp?: boolean;
 }

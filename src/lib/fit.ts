@@ -109,6 +109,7 @@ const EVENT: FieldDef[] = [
 const RECORD: FieldDef[] = [
   { num: 253, base: "u32" }, // timestamp
   { num: 3, base: "u8" }, // heart_rate (bpm)
+  { num: 4, base: "u8" }, // cadence (rpm/spm)
   { num: 5, base: "u32" }, // distance (m * 100)
   { num: 6, base: "u16" }, // speed (m/s * 1000)
 ];
@@ -182,6 +183,7 @@ export function encodeFitActivity(summary: SessionSummary, series: SeriesPoint[]
     writeData(body, 2, RECORD, [
       toFit(p.t),
       p.hr,
+      p.cadence,
       dist * 100,
       p.speedMps != null ? p.speedMps * 1000 : null,
     ]);

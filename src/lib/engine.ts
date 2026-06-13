@@ -44,6 +44,10 @@ export class MetricsEngine {
 
   private hr: number | null = null;
   private lastSpeed: number | null = null;
+  private cadence: number | null = null;
+  private cadenceT = 0;
+  private bodyTemp: number | null = null;
+  private bodyTempT = 0;
 
   private startT = 0;
   private lastTick = 0;
@@ -103,6 +107,10 @@ export class MetricsEngine {
     this.effBuf = [];
     this.hr = null;
     this.lastSpeed = null;
+    this.cadence = null;
+    this.cadenceT = 0;
+    this.bodyTemp = null;
+    this.bodyTempT = 0;
     this.startT = 0;
     this.lastTick = 0;
     this.running = false;
@@ -131,6 +139,28 @@ export class MetricsEngine {
 
   ingestPace(s: PaceSample) {
     this.lastSpeed = s.speedMps;
+  }
+
+  /** Running cadence in steps/min (from a sim or an RSC sensor). */
+  ingestCadence(t: number, spm: number) {
+    if (Number.isFinite(spm) && spm >= 0) {
+      this.cadence = spm;
+      this.cadenceT = t;
+    }
+  }
+
+  /** Core/body temperature in °C (from a sim or a thermometer sensor). */
+  ingestTemp(t: number, c: number) {
+    if (Number.isFinite(c) && c > 20 && c < 45) {
+      this.bodyTemp = c;
+      this.bodyTempT = t;
+    }
+  }
+
+  /** Most recent value if it arrived within `maxAgeSec`, else null. */
+  private fresh<T>(value: T | null, ts: number, now: number, maxAgeSec = 8): T | null {
+    if (value === null) return null;
+    return now - ts <= maxAgeSec * 1000 ? value : null;
   }
 
   /** Drop R-R beats older than the rolling window. */
@@ -197,6 +227,7 @@ export class MetricsEngine {
           speedMps: this.lastSpeed,
           brpm: this.resp.brpm,
           zone: this.hr !== null ? zoneForHr(this.hr, bounds) : null,
+          cadence: this.fresh(this.cadence, this.cadenceT, now),
         });
         if (this.series.length > MAX_SERIES) this.series.shift();
       }
@@ -226,6 +257,8 @@ export class MetricsEngine {
       speedMps: speed,
       paceSecPerKm,
       distanceM: this.distanceM,
+      cadence: this.fresh(this.cadence, this.cadenceT, now),
+      bodyTempC: this.fresh(this.bodyTemp, this.bodyTempT, now),
       intervalState: this.detector.current,
       intervalCount: this.detector.intervalCount,
       stateElapsedSec: this.detector.stateElapsedSec(now),
