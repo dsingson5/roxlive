@@ -7,10 +7,10 @@ compatibility_date = "2024-11-01"
 
 # KV namespace that stores each athlete's history. Create it once with:
 #   wrangler kv namespace create HISTORY
-# then paste the printed id below (replace REPLACE_WITH_KV_ID).
+# then paste the printed id below (replace 424a9fbf4fd24b498fe4c9fc64c46337).
 [[kv_namespaces]]
 binding = "HISTORY"
-id = "REPLACE_WITH_KV_ID"
+id = "424a9fbf4fd24b498fe4c9fc64c46337"
 
 # Optional: lock CORS to your site instead of "*".
 [vars]
@@ -18,3 +18,4 @@ ALLOW_ORIGIN = "https://dsingson5.github.io"
 
 # SYNC_KEY is a SECRET — do NOT put it here. Set it with:
 #   wrangler secret put SYNC_KEY
+
