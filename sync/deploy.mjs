@@ -23,21 +23,22 @@ import { dirname, join } from "node:path";
 const SYNC_DIR = dirname(fileURLToPath(import.meta.url));
 const TOML = join(SYNC_DIR, "wrangler.toml");
 const KEY_FILE = join(SYNC_DIR, ".sync-key.txt");
-// Use the .cmd shim on Windows and run WITHOUT a shell — passing shell:true here
-// is what triggered the libuv "UV_HANDLE_CLOSING" assertion crash.
-const NPX = process.platform === "win32" ? "npx.cmd" : "npx";
+// shell:true is required on Windows + Node 22 to launch the npx.cmd shim (and is
+// harmless elsewhere). The one-time "UV_HANDLE_CLOSING" line some Windows setups
+// print is benign teardown noise, not a crash.
 
 /** Run wrangler, capturing stdout. Throws on non-zero exit (e.g. not logged in). */
 function cap(args) {
-  return execFileSync(NPX, ["--yes", "wrangler", ...args], {
+  return execFileSync("npx", ["--yes", "wrangler", ...args], {
     cwd: SYNC_DIR,
     encoding: "utf8",
     stdio: ["inherit", "pipe", "inherit"],
+    shell: true,
   });
 }
 /** Run wrangler attached to your terminal (needed for the interactive login). */
 function tty(args) {
-  execFileSync(NPX, ["--yes", "wrangler", ...args], { cwd: SYNC_DIR, stdio: "inherit" });
+  execFileSync("npx", ["--yes", "wrangler", ...args], { cwd: SYNC_DIR, stdio: "inherit", shell: true });
 }
 const step = (m) => console.log(`\n→ ${m}`);
 
