@@ -32,13 +32,7 @@ export function SettingsDrawer({
     onConnect: () => void;
     onDisconnect: () => void;
   };
-  sync: {
-    config: SyncConfig;
-    user: string;
-    busy: boolean;
-    onSaveConfig: (c: SyncConfig) => void;
-    onSyncNow: () => void;
-  };
+  sync: SyncSectionProps;
   onClose: () => void;
   onSave: (p: AthleteProfile) => void;
 }) {
@@ -219,60 +213,150 @@ function StravaSection({
   );
 }
 
-function SyncSection({
-  sync: s,
-}: {
-  sync: {
-    config: SyncConfig;
-    user: string;
-    busy: boolean;
-    onSaveConfig: (c: SyncConfig) => void;
-    onSyncNow: () => void;
-  };
-}) {
-  const [open, setOpen] = useState(false);
+interface SyncSectionProps {
+  config: SyncConfig;
+  user: string;
+  hasUser: boolean;
+  signedIn: boolean;
+  mustChange: boolean;
+  busy: boolean;
+  onLogin: (password: string) => Promise<{ ok: boolean; error?: string }>;
+  onChangePassword: (current: string, next: string) => Promise<{ ok: boolean; error?: string }>;
+  onLogout: () => void;
+  onSyncNow: () => void;
+  onSaveUrl: (url: string) => void;
+}
+
+function SyncSection({ sync: s }: { sync: SyncSectionProps }) {
+  const [advanced, setAdvanced] = useState(false);
   const [url, setUrl] = useState(s.config.url);
-  const [key, setKey] = useState(s.config.key);
-  const dirty = url !== s.config.url || key !== s.config.key;
 
   return (
     <div>
       <div className="card-title mb-2">Cross-device sync</div>
-      {s.user ? (
+
+      {!s.hasUser ? (
+        <p className="text-[11px] text-[var(--color-ink-faint)] leading-relaxed">
+          Sign in from the Hybrid Crew hub to sync your history across devices.
+        </p>
+      ) : s.signedIn ? (
         <div className="rounded-lg bg-white/[0.03] border border-[var(--color-line)] p-3">
           <div className="flex items-center gap-2 text-[13px]">
             <span className="w-2 h-2 rounded-full bg-[var(--color-mint)]" style={{ boxShadow: "0 0 8px var(--color-mint)" }} />
-            <span className="text-[var(--color-ink)]">On — syncing {s.user}'s history across devices</span>
+            <span className="text-[var(--color-ink)]">Signed in as {s.user} — history syncing across devices</span>
           </div>
-          <div className="text-[11px] text-[var(--color-ink-faint)] mt-1">
-            Automatic for every signed-in crew athlete. Your workouts follow you to any device.
+          {s.mustChange && (
+            <div className="text-[11px] text-[var(--color-amber)] mt-2">
+              You're using your name as your password. Set a real one below to keep your history private.
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2 mt-2">
+            <button onClick={s.onSyncNow} disabled={s.busy} className="btn-ghost h-8 px-3 text-[12px] disabled:opacity-40">
+              {s.busy ? "Syncing…" : "Sync now"}
+            </button>
+            <button onClick={s.onLogout} className="btn-ghost h-8 px-3 text-[12px]">Sign out</button>
           </div>
-          <button onClick={s.onSyncNow} disabled={s.busy} className="btn-ghost h-8 px-3 mt-2 text-[12px] disabled:opacity-40">
-            {s.busy ? "Syncing…" : "Sync now"}
-          </button>
+          <ChangePasswordForm user={s.user} startOpen={s.mustChange} onChange={s.onChangePassword} />
         </div>
       ) : (
-        <p className="text-[11px] text-[var(--color-ink-faint)] leading-relaxed">
-          Sign in from the Hybrid Crew hub to sync your history across devices automatically.
-        </p>
+        <SignInForm user={s.user} onLogin={s.onLogin} />
       )}
 
-      <button onClick={() => setOpen((o) => !o)} className="text-[10px] text-[var(--color-ink-faint)] hover:text-[var(--color-ink-dim)] mt-2">
-        {open ? "Hide advanced" : "Advanced — custom worker / key"}
+      <button onClick={() => setAdvanced((o) => !o)} className="text-[10px] text-[var(--color-ink-faint)] hover:text-[var(--color-ink-dim)] mt-2">
+        {advanced ? "Hide advanced" : "Advanced — custom worker URL"}
       </button>
-      {open && (
+      {advanced && (
         <div className="mt-2">
           <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Sync URL (built-in default)" className="inp" autoComplete="off" />
-          <input value={key} onChange={(e) => setKey(e.target.value)} type="password" placeholder="Sync key (optional)" className="inp mt-2" autoComplete="off" />
-          <button
-            onClick={() => s.onSaveConfig({ url, key })}
-            disabled={!dirty}
-            className="btn-ghost h-9 px-4 mt-2 text-[13px] disabled:opacity-40"
-          >
-            Save
+          <button onClick={() => s.onSaveUrl(url)} disabled={url === s.config.url} className="btn-ghost h-9 px-4 mt-2 text-[13px] disabled:opacity-40">
+            Save URL
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function SignInForm({ user, onLogin }: { user: string; onLogin: (p: string) => Promise<{ ok: boolean; error?: string }> }) {
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const submit = async () => {
+    if (!pw || busy) return;
+    setBusy(true);
+    setErr("");
+    const r = await onLogin(pw);
+    setBusy(false);
+    if (!r.ok) setErr(r.error || "sign-in failed");
+    else setPw("");
+  };
+  return (
+    <div className="rounded-lg bg-white/[0.03] border border-[var(--color-line)] p-3">
+      <div className="text-[13px] text-[var(--color-ink)]">Sign in to sync {user}'s history</div>
+      <div className="text-[11px] text-[var(--color-ink-faint)] mt-0.5">First time? Use your name ({user.toLowerCase()}) as the password, then change it.</div>
+      <input
+        type="password"
+        value={pw}
+        onChange={(e) => setPw(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+        placeholder="Password"
+        className="inp mt-2"
+        autoComplete="current-password"
+      />
+      <button onClick={submit} disabled={!pw || busy} className="btn-volt h-9 px-4 mt-2 text-[13px] disabled:opacity-40">
+        {busy ? "Signing in…" : "Sign in"}
+      </button>
+      {err && <div className="text-[11px] text-[var(--color-red)] mt-1.5">{err}</div>}
+    </div>
+  );
+}
+
+function ChangePasswordForm({
+  user,
+  startOpen,
+  onChange,
+}: {
+  user: string;
+  startOpen: boolean;
+  onChange: (current: string, next: string) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [open, setOpen] = useState(startOpen);
+  const [cur, setCur] = useState("");
+  const [next, setNext] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    setMsg(null);
+    const r = await onChange(cur, next);
+    setBusy(false);
+    if (r.ok) {
+      setMsg({ ok: true, text: "Password changed ✓" });
+      setCur("");
+      setNext("");
+    } else {
+      setMsg({ ok: false, text: r.error || "change failed" });
+    }
+  };
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="text-[11px] text-[var(--color-cyan)] hover:underline mt-2">
+        Change password
+      </button>
+    );
+  }
+  return (
+    <div className="mt-2 pt-2 border-t border-[var(--color-line)]">
+      <input type="password" value={cur} onChange={(e) => setCur(e.target.value)} placeholder={`Current password (or "${user.toLowerCase()}")`} className="inp" autoComplete="current-password" />
+      <input type="password" value={next} onChange={(e) => setNext(e.target.value)} placeholder="New password (min 6 chars)" className="inp mt-2" autoComplete="new-password" />
+      <div className="flex items-center gap-2 mt-2">
+        <button onClick={submit} disabled={busy || !cur || next.length < 6} className="btn-ghost h-8 px-3 text-[12px] disabled:opacity-40">
+          {busy ? "Saving…" : "Save password"}
+        </button>
+        <button onClick={() => setOpen(false)} className="btn-ghost h-8 px-3 text-[12px]">Cancel</button>
+      </div>
+      {msg && <div className={`text-[11px] mt-1.5 ${msg.ok ? "text-[var(--color-mint)]" : "text-[var(--color-red)]"}`}>{msg.text}</div>}
     </div>
   );
 }

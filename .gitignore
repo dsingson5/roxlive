@@ -5,3 +5,4 @@ tmp/
 .DS_Store
 .wrangler/
 sync/.sync-key.txt
+sync/.auth-secret.txt

@@ -1,33 +1,34 @@
-# RoxLive cross-device history sync
+# RoxLive cross-device history sync + auth
 
-RoxLive saves each workout to the browser's `localStorage` (per-device) **and**
-mirrors it to a tiny **Cloudflare Worker + KV** store so an athlete's history
-follows them to **any device they sign in on**. It's **independent of Strava**.
+RoxLive mirrors each athlete's workout history to a tiny **Cloudflare Worker + KV**
+store so it follows them to **any device they sign in on**. The Worker also does
+**real password authentication**, so one login at the Hybrid Crew hub unlocks the
+hub *and* sync.
 
-For the crew this is **automatic** — the app ships with the Worker URL built in,
-and the Worker is **keyless** (access is gated by the crew allow-list + your site
-origin, the same trust model as the Hybrid Crew hub). Any athlete who signs in at
-the hub gets their history synced with **no per-device setup**. It stays
-local-first: if the Worker is unreachable, history still works offline and
-re-syncs later.
+How it feels for the crew:
+- Sign in at the hub with your name + password. **First time, your password is your
+  name** (the crew's old soft credential) — you're prompted to change it in
+  RoxLive → Settings → Cross-device sync.
+- A successful login stores a signed, ~90-day session. Day-to-day it's automatic
+  and works offline; only the *first* login on a device needs the Worker online.
 
-This guide is for **deploying / re-deploying your own Worker** (the crew's is
-already live at `roxlive-sync.david-singson.workers.dev`).
+This guide is for **deploying / re-deploying the Worker** (the crew's is live at
+`roxlive-sync.david-singson.workers.dev`).
 
 ---
 
 ## Easiest: one command
 
-You need a free [Cloudflare](https://dash.cloudflare.com/sign-up) account and
-[Node.js](https://nodejs.org). From the repo root:
+Free [Cloudflare](https://dash.cloudflare.com/sign-up) account + [Node.js](https://nodejs.org).
+From the repo root:
 
 ```bash
 node sync/deploy.mjs
 ```
 
-It logs you in (browser → **Allow**), creates the KV namespace, deploys the
-Worker, and prints the URL. Then point `DEFAULT_SYNC_URL` in `src/lib/sync.ts` at
-that URL, rebuild, and push. No secret, nothing to paste in the app.
+It logs you in (browser → **Allow**), creates the KV namespace, generates + sets
+the `AUTH_SECRET` signing key, and deploys. Point `DEFAULT_SYNC_URL` in
+`src/lib/sync.ts` at the printed URL, rebuild, push.
 
 ---
 
@@ -36,42 +37,41 @@ that URL, rebuild, and push. No secret, nothing to paste in the app.
 ```bash
 cd sync
 wrangler login
-wrangler kv namespace create HISTORY     # paste the id into sync/wrangler.toml
+wrangler kv namespace create HISTORY                 # paste the id into wrangler.toml
+# 32-byte random signing key for session tokens:
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))" | wrangler secret put AUTH_SECRET
 wrangler deploy
 ```
 
-Wrangler prints your Worker URL, e.g. `https://roxlive-sync.<your-subdomain>.workers.dev`.
-Set that as `DEFAULT_SYNC_URL` in `src/lib/sync.ts`, rebuild, deploy the app.
+> Re-setting `AUTH_SECRET` rotates it and invalidates everyone's sessions (they
+> just sign in again). `deploy.mjs` saves it to `sync/.auth-secret.txt`
+> (git-ignored) and reuses it so re-runs don't log people out.
 
 ---
 
-## How it works
+## Auth model
 
-- RoxLive identifies the athlete by the Hybrid Crew sign-in (`hcUser`) — the same
-  id used for the per-user local history key.
-- `GET /history?user=<id>` returns that athlete's saved sessions; `PUT` merges in
-  a new set. Access is allowed when the user is a known crew member and (for
-  browser requests) the `Origin` matches `ALLOW_ORIGIN`.
-- The **Worker merges on write** (server-side union by session id), so two devices
-  pushing at once never clobber each other.
-- RoxLive also merges on **pull** to fold in local-only sessions. Conflicts keep
-  the richer copy and **RPE is merged field-by-field**, so an overall score on one
-  device and per-segment scores on another both survive.
-- **Deletes propagate** via tombstones (id → deletedAt) sent with each push, so a
-  removed workout stays removed instead of being resurrected by the union.
-- The cloud keeps a larger cap (200) than the on-screen list (50), so syncing
-  never prunes the cloud below what a device has held.
+- **Passwords:** PBKDF2-SHA256 (100k iterations) + a per-user random salt, stored
+  in KV (`auth:<user>`). Plaintext is never stored or logged.
+- **First login** seeds the password to the athlete's own name, flagged
+  `mustChange` so the app nudges them to set a real one. *Until they do, the
+  account is only as private as their name.*
+- **Sessions:** login returns an HMAC-SHA256-signed token `{ user, exp }`
+  (`AUTH_SECRET`), good ~90 days. `/history` requires a valid token whose user
+  matches the requested `?user` — real per-athlete isolation.
+- **Endpoints:** `POST /login`, `POST /password` (change, needs current),
+  `GET|PUT /history?user=`. Browser requests must match `ALLOW_ORIGIN`.
 
-## Notes & limits
+## History merge
 
-- **Trust model.** This is a convenience store for low-sensitivity workout
-  metrics, gated like the hub itself — by crew name + site origin. Anyone who
-  knows the URL and a crew name could read/write that athlete's history (the data
-  is crew-visible by design). Keep `ALLOW_ORIGIN` set to your site in
-  `wrangler.toml` to block cross-site browser use.
-- **Optional extra key.** The Worker still honors a `SYNC_KEY` secret if you set
-  one (`wrangler secret put SYNC_KEY`) *and* enter it under RoxLive → Settings →
-  Cross-device sync → Advanced. Keyless clients remain allowed, so this only adds
-  a check for clients that do send a token.
-- **Free tier** KV limits (reads/writes per day, 25 MB per value) are far above
-  what a crew logging workouts will ever hit.
+Server-side union by session id (two devices never clobber each other), tombstone
+deletes (a removed workout can't be resurrected), field-merged RPE, cloud cap 200.
+
+## Honest limits
+
+- The hub's training pages are static files on public GitHub Pages — they can't be
+  truly locked down (anyone with a file URL can read them). The password's real
+  teeth are on the **sync data** (server-verified) and on raising the bar at the
+  gate. Treat the training content as not-secret.
+- Keep `ALLOW_ORIGIN` set to your site in `wrangler.toml`.
+- Free-tier KV limits are far above a crew's usage.

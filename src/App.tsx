@@ -24,7 +24,17 @@ import { VISION_MODELS } from "./lib/vision";
 import { VoiceCoach } from "./lib/voice";
 import { addToHistory, clearHistory, deleteFromHistory, loadHistory, pullAndMerge, updateHistory } from "./lib/history";
 import { resolveCrewUser, prettyUser } from "./lib/user";
-import { loadSyncConfig, saveSyncConfig, isSyncConfigured, flushPendingPushes, type SyncConfig } from "./lib/sync";
+import {
+  loadSyncConfig,
+  saveSyncConfig,
+  isSyncConfigured,
+  flushPendingPushes,
+  login as syncLogin,
+  changePassword as syncChangePassword,
+  clearSession,
+  sessionUser,
+  type SyncConfig,
+} from "./lib/sync";
 import * as strava from "./lib/strava";
 import { TopBar } from "./components/TopBar";
 import { HeroHR, DfaGauge } from "./components/HeroPanels";
@@ -66,11 +76,14 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDetail, setHistoryDetail] = useState<SessionSummary | null>(null);
 
-  // Cross-device sync (opt-in): pull the cloud copy, merge with local, push back.
+  // Cross-device sync: a signed-in athlete's history follows them to any device.
+  // Auth is a real password (server-verified) → a signed session token.
   const [syncCfg, setSyncCfg] = useState<SyncConfig>(() => loadSyncConfig());
   const [syncBusy, setSyncBusy] = useState(false);
+  const [signedIn, setSignedIn] = useState(() => !!crewUser && sessionUser() === crewUser);
+  const [mustChangePw, setMustChangePw] = useState(false);
   const syncNow = useCallback(async () => {
-    if (!crewUser || !isSyncConfigured()) return;
+    if (!crewUser || !isSyncConfigured() || sessionUser() !== crewUser) return;
     setSyncBusy(true);
     try {
       setHistory(await pullAndMerge()); // pull → union+tombstones → persist + push back
@@ -78,7 +91,45 @@ export default function App() {
       setSyncBusy(false);
     }
   }, [crewUser]);
-  // Pull on load (once the athlete is known).
+  const handleLogin = useCallback(
+    async (password: string) => {
+      if (!crewUser) return { ok: false, error: "no athlete signed in" };
+      const r = await syncLogin(crewUser, password);
+      if (r.ok) {
+        setSignedIn(true);
+        setMustChangePw(!!r.mustChange);
+        syncNow();
+      }
+      return r;
+    },
+    [crewUser, syncNow]
+  );
+  const handleChangePassword = useCallback(
+    async (current: string, next: string) => {
+      if (!crewUser) return { ok: false, error: "no athlete signed in" };
+      const r = await syncChangePassword(crewUser, current, next);
+      if (r.ok) {
+        setSignedIn(true);
+        setMustChangePw(false);
+      }
+      return r;
+    },
+    [crewUser]
+  );
+  const handleLogout = useCallback(() => {
+    clearSession();
+    // Also drop the bound identity so a shared device doesn't keep showing the
+    // previous athlete's cached history/name; reload for a clean slate.
+    try {
+      localStorage.removeItem("hcUser");
+      sessionStorage.removeItem("hcUser");
+      localStorage.removeItem("roxlive.user");
+    } catch {
+      /* ignore */
+    }
+    window.location.reload();
+  }, []);
+  // Pull on load (once the athlete is known + a session exists).
   useEffect(() => {
     syncNow();
   }, [syncNow]);
@@ -711,9 +762,15 @@ export default function App() {
         sync={{
           config: syncCfg,
           user: prettyUser(crewUser),
+          hasUser: !!crewUser,
+          signedIn,
+          mustChange: mustChangePw,
           busy: syncBusy,
-          onSaveConfig: (c) => { saveSyncConfig(c); setSyncCfg(loadSyncConfig()); },
+          onLogin: handleLogin,
+          onChangePassword: handleChangePassword,
+          onLogout: handleLogout,
           onSyncNow: syncNow,
+          onSaveUrl: (url) => { saveSyncConfig({ url }); setSyncCfg(loadSyncConfig()); },
         }}
         onClose={() => setSettingsOpen(false)}
         onSave={eng.setProfile}

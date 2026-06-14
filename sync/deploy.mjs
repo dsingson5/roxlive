@@ -16,13 +16,15 @@
  * Re-running is safe: it reuses the existing namespace.
  */
 
-import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const SYNC_DIR = dirname(fileURLToPath(import.meta.url));
 const TOML = join(SYNC_DIR, "wrangler.toml");
+const SECRET_FILE = join(SYNC_DIR, ".auth-secret.txt");
 // shell:true is required on Windows + Node 22 to launch the npx.cmd shim (and is
 // harmless elsewhere). The one-time "UV_HANDLE_CLOSING" line some Windows setups
 // print is benign teardown noise, not a crash.
@@ -79,20 +81,40 @@ toml = toml
   .replace(/id\s*=\s*"[0-9a-fA-F]{32}"/, `id = "${kvId}"`);
 writeFileSync(TOML, toml);
 
-// 4. Deploy -------------------------------------------------------------------
+// 4. AUTH_SECRET (HMAC signing key for session tokens) ------------------------
+// Generated once and reused (saved locally, git-ignored) so re-runs don't rotate
+// it and log everyone out. Server-side only — never shipped to the app.
+step("Setting the AUTH_SECRET signing key…");
+let secret = existsSync(SECRET_FILE) ? readFileSync(SECRET_FILE, "utf8").trim() : "";
+if (!secret) {
+  secret = randomBytes(32).toString("base64url");
+  writeFileSync(SECRET_FILE, secret);
+}
+const sec = spawnSync("npx", ["--yes", "wrangler", "secret", "put", "AUTH_SECRET"], {
+  cwd: SYNC_DIR,
+  input: secret + "\n",
+  stdio: ["pipe", "inherit", "inherit"],
+  shell: true,
+});
+if (sec.status !== 0) {
+  console.error("Failed to set AUTH_SECRET — see wrangler output above.");
+  process.exit(1);
+}
+
+// 5. Deploy -------------------------------------------------------------------
 step("Deploying the Worker…");
 const deployOut = cap(["deploy"]);
 console.log(deployOut);
 const urlMatch = deployOut.match(/https:\/\/[^\s]+\.workers\.dev/);
 
-// 5. Done ---------------------------------------------------------------------
+// 6. Done ---------------------------------------------------------------------
 console.log("\n========================================================");
-console.log("  Sync Worker deployed (keyless — gated by crew allow-list).");
+console.log("  Sync + auth Worker deployed.");
 console.log(`  URL: ${urlMatch ? urlMatch[0] : "https://roxlive-sync.<your-subdomain>.workers.dev"}`);
 console.log("");
 console.log("  Make sure DEFAULT_SYNC_URL in src/lib/sync.ts points to this URL,");
-console.log("  then rebuild + push. Sync is then automatic for every signed-in");
-console.log("  crew athlete — no per-device setup.");
+console.log("  then rebuild + push. Crew members sign in at the hub (first time:");
+console.log("  password = their name) and history syncs across devices.");
 console.log("  Optional — save the KV id config:");
 console.log('    git add sync/wrangler.toml && git commit -m "sync: KV id" && git push');
 console.log("========================================================");

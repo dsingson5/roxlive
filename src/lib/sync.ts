@@ -19,13 +19,12 @@
 import type { RpeLog, SessionSummary } from "../types";
 
 const URL_KEY = "roxlive.sync.url";
-const KEY_KEY = "roxlive.sync.key";
+const SESSION_KEY = "roxlive.session";
 const MAX = 50; // keep in step with lib/history.ts
 
-// Built-in endpoint so cross-device sync is ON automatically for every signed-in
-// crew athlete — no per-device setup. The Worker gates access by the crew
-// allow-list + site origin (see sync/worker.js), so there is no secret here.
-// Power users can still point at a private worker / add a key in Settings.
+// Built-in endpoint so there's no per-device URL setup. Auth is a signed session
+// token from /login (set by the Hybrid Crew hub login or RoxLive sign-in) — no
+// secret ships in this bundle. Power users can override the URL in Settings.
 const DEFAULT_SYNC_URL = "https://roxlive-sync.david-singson.workers.dev";
 
 export type Tombstones = Record<string, number>;
@@ -36,53 +35,127 @@ export interface RemoteHistory {
 
 export interface SyncConfig {
   url: string;
-  key: string;
 }
 
 export function loadSyncConfig(): SyncConfig {
   try {
-    // A localStorage override wins; otherwise fall back to the built-in endpoint
-    // so sync works out of the box. Key is optional (the worker is keyless).
-    return {
-      url: (localStorage.getItem(URL_KEY) || "").trim() || DEFAULT_SYNC_URL,
-      key: (localStorage.getItem(KEY_KEY) || "").trim(),
-    };
+    return { url: (localStorage.getItem(URL_KEY) || "").trim() || DEFAULT_SYNC_URL };
   } catch {
-    return { url: DEFAULT_SYNC_URL, key: "" };
+    return { url: DEFAULT_SYNC_URL };
   }
 }
 
 export function saveSyncConfig(c: SyncConfig): void {
   try {
     localStorage.setItem(URL_KEY, c.url.trim().replace(/\/+$/, ""));
-    localStorage.setItem(KEY_KEY, c.key.trim());
   } catch {
     /* ignore */
   }
 }
 
 export function isSyncConfigured(c: SyncConfig = loadSyncConfig()): boolean {
-  return !!c.url; // a URL always resolves (built-in default) → sync is on for crew
+  return !!c.url;
 }
 
-function endpoint(c: SyncConfig, user: string): string {
-  return `${c.url}/history?user=${encodeURIComponent(user)}`;
+/* ------------------------------ session/auth ----------------------------- */
+
+export function loadSession(): string {
+  try {
+    return localStorage.getItem(SESSION_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+function saveSession(t: string): void {
+  try {
+    localStorage.setItem(SESSION_KEY, t);
+  } catch {
+    /* ignore */
+  }
+}
+export function clearSession(): void {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
-/** Auth header only when an optional key override is set (worker is keyless). */
-function authHeaders(c: SyncConfig): Record<string, string> {
-  return c.key ? { authorization: `Bearer ${c.key}` } : {};
+/** The user the current (locally-unexpired) session belongs to, or null. The
+ *  server re-verifies the HMAC signature; this only decodes for UI gating. */
+export function sessionUser(): string | null {
+  const t = loadSession();
+  const dot = t.indexOf(".");
+  if (dot <= 0) return null;
+  try {
+    const payload = JSON.parse(decodeB64url(t.slice(0, dot)));
+    if (!payload || typeof payload.u !== "string" || typeof payload.exp !== "number") return null;
+    if (Date.now() > payload.exp) return null;
+    return payload.u;
+  } catch {
+    return null;
+  }
+}
+
+/** Sign in: verifies the password server-side and stores the session token. */
+export async function login(user: string, password: string): Promise<{ ok: boolean; mustChange?: boolean; error?: string }> {
+  const { url } = loadSyncConfig();
+  try {
+    const res = await fetch(`${url}/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.token) return { ok: false, error: data.error || `sign-in failed (${res.status})` };
+    saveSession(data.token);
+    return { ok: true, mustChange: !!data.mustChange };
+  } catch {
+    return { ok: false, error: "network error — try again" };
+  }
+}
+
+/** Change password (requires the current one); refreshes the session token. */
+export async function changePassword(
+  user: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<{ ok: boolean; error?: string }> {
+  const { url } = loadSyncConfig();
+  try {
+    const res = await fetch(`${url}/password`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user, currentPassword, newPassword }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.token) return { ok: false, error: data.error || `change failed (${res.status})` };
+    saveSession(data.token);
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "network error — try again" };
+  }
+}
+
+/* -------------------------------- sync I/O ------------------------------- */
+
+function endpoint(url: string, user: string): string {
+  return `${url}/history?user=${encodeURIComponent(user)}`;
+}
+function authHeaders(): Record<string, string> {
+  const t = loadSession();
+  return t ? { authorization: `Bearer ${t}` } : {};
 }
 
 /**
- * Pull the athlete's cloud history. Returns null when sync is off / no user, or
- * on any network/auth error (callers keep their local copy). Never throws.
+ * Pull the athlete's cloud history. Returns null unless signed in as `user`
+ * (and on any network/auth error) so callers keep their local copy. Never throws.
  */
 export async function pullHistory(user: string | null): Promise<RemoteHistory | null> {
   const c = loadSyncConfig();
-  if (!user || !isSyncConfigured(c)) return null;
+  if (!user || !isSyncConfigured(c) || sessionUser() !== user) return null;
   try {
-    const res = await fetch(endpoint(c, user), { headers: authHeaders(c) });
+    const res = await fetch(endpoint(c.url, user), { headers: authHeaders() });
     if (!res.ok) return null;
     const data = await res.json();
     return {
@@ -96,10 +169,10 @@ export async function pullHistory(user: string | null): Promise<RemoteHistory | 
 
 async function putHistory(user: string, sessions: SessionSummary[], tombstones: Tombstones): Promise<void> {
   const c = loadSyncConfig();
-  if (!isSyncConfigured(c)) return;
-  await fetch(endpoint(c, user), {
+  if (!isSyncConfigured(c) || sessionUser() !== user) return;
+  await fetch(endpoint(c.url, user), {
     method: "PUT",
-    headers: { ...authHeaders(c), "content-type": "application/json" },
+    headers: { ...authHeaders(), "content-type": "application/json" },
     body: JSON.stringify({ sessions: sessions.slice(0, MAX), tombstones }),
     keepalive: true, // let a push begun on unload still complete
   });
@@ -118,7 +191,7 @@ const pending = new Map<string, PendingPush>();
  * site knowing about it. No-op when sync is off.
  */
 export function pushHistorySoon(user: string | null, sessions: SessionSummary[], tombstones: Tombstones): void {
-  if (!user || !isSyncConfigured()) return;
+  if (!user || !isSyncConfigured() || sessionUser() !== user) return;
   const prev = pending.get(user);
   if (prev) clearTimeout(prev.timer);
   const snapSessions = sessions.slice(0, MAX);
@@ -212,4 +285,11 @@ function mergeSeg(
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/** Decode a base64url segment to its (ASCII JSON) string. */
+function decodeB64url(s: string): string {
+  let b = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (b.length % 4) b += "=";
+  return atob(b);
 }
