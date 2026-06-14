@@ -3,6 +3,9 @@ import { motion } from "motion/react";
 import { useEngine } from "./hooks/useEngine";
 import { useWorkoutRunner } from "./hooks/useWorkoutRunner";
 import { useSquad, MAX_ATHLETES } from "./hooks/useSquad";
+import { usePiP, type PaintFn } from "./hooks/usePiP";
+import { paintFrame, ZONE_HEX, type PipFrame } from "./lib/pipPaint";
+import { fmtClock } from "./lib/format";
 import type {
   SegmentRecord,
   SeriesPoint,
@@ -18,7 +21,7 @@ import { selfTestDFA } from "./lib/dfa";
 import { cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan } from "./lib/workout";
 import { VISION_MODELS } from "./lib/vision";
 import { VoiceCoach } from "./lib/voice";
-import { addToHistory, clearHistory, deleteFromHistory, loadHistory } from "./lib/history";
+import { addToHistory, clearHistory, deleteFromHistory, loadHistory, updateHistory } from "./lib/history";
 import * as strava from "./lib/strava";
 import { TopBar } from "./components/TopBar";
 import { HeroHR, DfaGauge } from "./components/HeroPanels";
@@ -111,6 +114,19 @@ export default function App() {
   const planFnRef = useRef<((tSec: number) => number | null) | null>(null);
   const fullSeriesRef = useRef<SeriesPoint[]>([]);
 
+  // Workout pause: freezes the plan clock (countdown, cues, adherence) while the
+  // engine keeps recording HR. pausedAt = when paused; pauseAccum = total paused ms.
+  const [paused, setPaused] = useState(false);
+  const pausedAtRef = useRef<number | null>(null);
+  const pauseAccumRef = useRef(0);
+
+  /** Plan elapsed seconds, pause-adjusted. `clockNow` lets callers pass snap.t. */
+  const planElapsed = (clockNow: number): number => {
+    if (anchorRef.current == null) return 0;
+    const effNow = pausedAtRef.current ?? clockNow;
+    return Math.max(0, (effNow - anchorRef.current - pauseAccumRef.current) / 1000);
+  };
+
   // HYROX voice coach (separate from the workout runner's coach).
   // Lazy-init so the constructor runs once, not on every render.
   const hyroxCoachRef = useRef<VoiceCoach | null>(null);
@@ -124,10 +140,11 @@ export default function App() {
   }, [plan, voice.leadInSec, profile]);
 
   // Handed to the simulator once: easy warm-up HR until START, then the plan.
+  // Pause-aware so the sim holds the current interval's target while paused.
   const simTargetFn = useCallback((_simElapsedSec: number): number | null => {
     if (anchorRef.current == null || !planFnRef.current) return null;
-    const t = (performance.timeOrigin + performance.now() - anchorRef.current) / 1000;
-    return planFnRef.current(t);
+    return planFnRef.current(planElapsed(performance.timeOrigin + performance.now()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Multi-athlete squad (its own engines; independent of the solo session).
@@ -146,7 +163,7 @@ export default function App() {
     profile,
     voice,
     active: workoutActive,
-    elapsedSec: workoutAnchor != null ? Math.max(0, (snap.t - workoutAnchor) / 1000) : 0,
+    elapsedSec: planElapsed(snap.t),
     hr: snap.hr,
   });
 
@@ -178,6 +195,23 @@ export default function App() {
   const clearAnchor = () => {
     anchorRef.current = null;
     setWorkoutAnchor(null);
+    pausedAtRef.current = null;
+    pauseAccumRef.current = 0;
+    setPaused(false);
+  };
+
+  const togglePause = () => {
+    if (anchorRef.current == null) return;
+    const t = performance.timeOrigin + performance.now();
+    if (pausedAtRef.current == null) {
+      pausedAtRef.current = t; // pause: freeze the plan clock
+      runner.coach.cancel(); // stop any in-flight countdown speech
+      setPaused(true);
+    } else {
+      pauseAccumRef.current += t - pausedAtRef.current; // resume: absorb paused span
+      pausedAtRef.current = null;
+      setPaused(false);
+    }
   };
 
   // Demo / Connect just bring a HR source online. In workout mode nothing is
@@ -206,6 +240,9 @@ export default function App() {
     if (!plan || eng.mode === "idle") return;
     runner.coach.prime(); // user gesture: unlock speech synthesis + audio
     const t = performance.timeOrigin + performance.now();
+    pausedAtRef.current = null;
+    pauseAccumRef.current = 0;
+    setPaused(false);
     anchorRef.current = t;
     setWorkoutAnchor(t);
   };
@@ -313,6 +350,61 @@ export default function App() {
     if (eng.mode === "idle") setManualFocus(null);
   }, [eng.mode]);
 
+  // ---- Picture-in-Picture mini window ----
+  const paintRef = useRef<PaintFn>(() => {});
+  const pip = usePiP(paintRef);
+  const buildPipFrame = (): PipFrame => {
+    if (raceMode === "squad") {
+      const athletes = squad.athletes
+        .map((a) => {
+          const s = squad.snapshots[a.id];
+          const v = squad.views[a.id];
+          const sub =
+            v && v.phase === "running" && v.interval
+              ? `${v.interval.name} ${fmtClock(Math.ceil(v.remainingSec))}`
+              : v && v.phase === "leadin"
+                ? "starting…"
+                : v && v.phase === "done"
+                  ? "done"
+                  : s?.hr != null
+                    ? "live"
+                    : "";
+          return { name: a.name, hr: s?.hr ?? null, color: a.color, sub, paused: !!squad.pausedIds[a.id] };
+        })
+        .filter((a) => a.hr != null || a.sub);
+      return { title: "Squad", mode: "squad", athletes };
+    }
+    const zoneColor = snap.hr != null && snap.zone ? ZONE_HEX[snap.zone - 1] : "#5d6675";
+    let line1: string | undefined;
+    let line2: string | undefined;
+    let status: string | undefined;
+    let statusColor: string | undefined;
+    if (raceMode === "workout" && runner.state.phase === "running" && runner.state.interval) {
+      line1 = runner.state.interval.name;
+      line2 = fmtClock(Math.ceil(runner.state.remainingSec));
+      const st = runner.state.hrStatus;
+      if (st === "in") { status = "ON TARGET"; statusColor = "#3dffb5"; }
+      else if (st === "under") { status = "PUSH"; statusColor = "#38e1ff"; }
+      else if (st === "over") { status = "EASE"; statusColor = "#ffb02e"; }
+    } else if (raceMode === "hyrox") {
+      line1 = segments[currentIndex]?.label;
+      if (hyroxRemaining != null) line2 = fmtClock(Math.ceil(hyroxRemaining));
+    }
+    return {
+      title: raceMode === "workout" && plan ? plan.title : raceMode === "hyrox" ? "HYROX" : "Analyzer",
+      mode: "solo",
+      hr: snap.hr,
+      zoneColor,
+      pctMax: snap.pctMax,
+      line1,
+      line2,
+      status,
+      statusColor,
+      paused,
+    };
+  };
+  paintRef.current = (ctx, w, h) => paintFrame(ctx, w, h, buildPipFrame());
+
   const handleStop = () => {
     if (raceMode === "squad") return; // squad has its own lifecycle
     const workoutSegs =
@@ -349,7 +441,10 @@ export default function App() {
         onDemo={handleDemo}
         onStop={handleStop}
         onSettings={() => setSettingsOpen(true)}
-        onHistory={() => setHistoryOpen(true)}
+        onHistory={() => { setHistory(loadHistory()); setHistoryOpen(true); }}
+        onPiP={pip.toggle}
+        pipActive={pip.active}
+        pipSupported={pip.supported}
         supported={eng.supported}
       />
 
@@ -374,6 +469,7 @@ export default function App() {
             views={squad.views}
             adherence={squad.adherence}
             running={squad.running}
+            pausedIds={squad.pausedIds}
             plans={squadPlans}
             supported={squad.supported}
             max={MAX_ATHLETES}
@@ -388,6 +484,8 @@ export default function App() {
               startPlan: squad.startPlan,
               startAll: squad.startAll,
               stopAll: squad.stopAll,
+              pauseAthlete: squad.pauseAthlete,
+              logRpe: squad.logAthleteRpe,
             }}
           />
         ) : (
@@ -414,7 +512,9 @@ export default function App() {
                   hr={snap.hr}
                   sourceLive={eng.mode !== "idle"}
                   simulated={eng.mode === "demo"}
+                  paused={paused}
                   onStart={handleStartWorkout}
+                  onPause={togglePause}
                   onConnect={handleConnect}
                   onSimulate={handleDemo}
                   onEdit={() => setBuilderOpen(true)}
@@ -502,6 +602,11 @@ export default function App() {
         summary={summary}
         fullSeries={fullSeriesRef.current}
         strava={{ connected: stravaConnected, post: strava.postActivity }}
+        onRpe={(rpe) => {
+          if (!summary) return;
+          setSummary({ ...summary, rpe });
+          setHistory(updateHistory(summary.id, { rpe }));
+        }}
         onClose={() => {
           setSummary(null);
           eng.reset();
@@ -512,6 +617,12 @@ export default function App() {
       <SummaryModal
         summary={historyDetail}
         fullSeries={historyDetail?.series ?? []}
+        strava={{ connected: stravaConnected, post: strava.postActivity }}
+        onRpe={(rpe) => {
+          if (!historyDetail) return;
+          setHistoryDetail({ ...historyDetail, rpe });
+          setHistory(updateHistory(historyDetail.id, { rpe }));
+        }}
         onClose={() => setHistoryDetail(null)}
       />
 

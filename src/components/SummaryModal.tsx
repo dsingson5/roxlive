@@ -1,16 +1,18 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import type { SeriesPoint, SessionSummary } from "../types";
+import type { RpeLog, SeriesPoint, SessionSummary } from "../types";
 import type { PostResult } from "../lib/strava";
 import { Sparkline } from "./Charts";
 import { ZONE_DEFS } from "../lib/zones";
 import { downloadFit } from "../lib/fit";
+import { RpeScale } from "./RpeScale";
 import { fmtClock, fmtDist, fmtNum, fmtSigned } from "../lib/format";
 
 export function SummaryModal({
   summary,
   fullSeries,
   strava,
+  onRpe,
   onClose,
 }: {
   summary: SessionSummary | null;
@@ -20,6 +22,8 @@ export function SummaryModal({
     connected: boolean;
     post: (summary: SessionSummary, series: SeriesPoint[], opts: { name: string; description: string }) => Promise<PostResult>;
   };
+  /** persist an RPE log for this session */
+  onRpe?: (rpe: RpeLog) => void;
   onClose: () => void;
 }) {
   return (
@@ -108,6 +112,8 @@ export function SummaryModal({
                 </>
               )}
 
+              {onRpe && <RpeSection summary={summary} onRpe={onRpe} />}
+
               {strava?.connected && (
                 <StravaPost summary={summary} series={fullSeries.length ? fullSeries : summary.series} post={strava.post} />
               )}
@@ -130,6 +136,49 @@ export function SummaryModal({
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+function RpeSection({ summary, onRpe }: { summary: SessionSummary; onRpe: (rpe: RpeLog) => void }) {
+  const [rpe, setRpe] = useState<RpeLog>(summary.rpe ?? { overall: null, perSegment: {} });
+  const [perOpen, setPerOpen] = useState(false);
+
+  const update = (next: RpeLog) => {
+    setRpe(next);
+    onRpe(next);
+  };
+  const setOverall = (v: number) => update({ ...rpe, overall: v });
+  const setSeg = (i: number, v: number) => update({ ...rpe, perSegment: { ...(rpe.perSegment ?? {}), [i]: v } });
+
+  const hasSegments = summary.segments.length > 0;
+
+  return (
+    <div className="card p-4 mt-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="card-title">How hard was it? (RPE)</div>
+        {hasSegments && (
+          <button onClick={() => setPerOpen((o) => !o)} className="text-[11px] text-[var(--color-cyan)]">
+            {perOpen ? "hide per-interval" : "log per-interval"}
+          </button>
+        )}
+      </div>
+      <RpeScale value={rpe.overall} onChange={setOverall} />
+
+      <AnimatePresence>
+        {perOpen && hasSegments && (
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+            <div className="mt-3 space-y-2 pt-2 border-t border-[var(--color-line)]">
+              {summary.segments.map((s) => (
+                <div key={s.index}>
+                  <div className="text-[11px] text-[var(--color-ink-dim)] mb-1">{s.label}</div>
+                  <RpeScale value={rpe.perSegment?.[s.index] ?? null} onChange={(v) => setSeg(s.index, v)} size="sm" />
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 

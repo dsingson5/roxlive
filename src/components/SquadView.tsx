@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { motion } from "motion/react";
-import type { MetricsSnapshot, WorkoutPlan } from "../types";
+import type { MetricsSnapshot, RpeLog, WorkoutPlan } from "../types";
 import type { SquadAthlete } from "../hooks/useSquad";
 import type { RunnerView } from "../lib/workout";
 import { ZONE_DEFS } from "../lib/zones";
 import { KIND_COLOR, targetLabel } from "../lib/workout";
+import { RpeScale } from "./RpeScale";
 import { fmtClock } from "../lib/format";
 
 interface Handlers {
@@ -17,6 +19,8 @@ interface Handlers {
   startPlan: (id: string) => void;
   startAll: () => void;
   stopAll: () => void;
+  pauseAthlete: (id: string) => void;
+  logRpe: (id: string, rpe: RpeLog) => void;
 }
 
 export function SquadView({
@@ -25,6 +29,7 @@ export function SquadView({
   views,
   adherence,
   running,
+  pausedIds,
   plans,
   supported,
   max,
@@ -35,6 +40,7 @@ export function SquadView({
   views: Record<string, RunnerView>;
   adherence: Record<string, number | null>;
   running: boolean;
+  pausedIds: Record<string, boolean>;
   plans: WorkoutPlan[];
   supported: boolean;
   max: number;
@@ -71,6 +77,7 @@ export function SquadView({
               snap={snapshots[a.id]}
               view={views[a.id]}
               adh={adherence[a.id] ?? null}
+              paused={!!pausedIds[a.id]}
               plans={plans}
               supported={supported}
               h={h}
@@ -87,6 +94,7 @@ function AthleteCard({
   snap,
   view,
   adh,
+  paused,
   plans,
   supported,
   h,
@@ -95,6 +103,7 @@ function AthleteCard({
   snap?: MetricsSnapshot;
   view?: RunnerView;
   adh: number | null;
+  paused: boolean;
   plans: WorkoutPlan[];
   supported: boolean;
   h: Handlers;
@@ -152,8 +161,16 @@ function AthleteCard({
 
       {/* status / controls */}
       <div className="mt-3 min-h-[40px] flex items-center">
-        {view && view.phase === "running" && view.interval ? (
-          <RunningStrip a={a} view={view} hr={hr} />
+        {view && (view.phase === "running" || (paused && view.phase !== "idle")) && view.interval ? (
+          <div className="w-full">
+            <RunningStrip a={a} view={view} hr={hr} />
+            <div className="flex items-center justify-between mt-2">
+              <button onClick={() => h.pauseAthlete(a.id)} className="btn-ghost h-7 px-3 text-[11px]" style={paused ? { borderColor: a.color, color: a.color } : undefined}>
+                {paused ? "▶ Resume" : "❚❚ Pause"}
+              </button>
+              {paused && <span className="text-[10px] mono" style={{ color: a.color }}>PAUSED · ♥ recording</span>}
+            </div>
+          </div>
         ) : view && view.phase === "leadin" ? (
           <div className="text-center w-full">
             <span className="num text-2xl" style={{ color: a.color }}>{Math.ceil(view.remainingSec)}</span>
@@ -172,6 +189,41 @@ function AthleteCard({
           </button>
         ) : null}
       </div>
+
+      {/* RPE — available once the athlete has a live source (during/after) */}
+      {sourceLive && <AthleteRpe a={a} onLog={(rpe) => h.logRpe(a.id, rpe)} />}
+    </div>
+  );
+}
+
+function AthleteRpe({ a, onLog }: { a: SquadAthlete; onLog: (rpe: RpeLog) => void }) {
+  const [open, setOpen] = useState(false);
+  const rpe = a.rpe ?? { overall: null, perSegment: {} };
+  const update = (next: RpeLog) => onLog(next);
+  return (
+    <div className="mt-2 pt-2 border-t border-[var(--color-line)]">
+      <button onClick={() => setOpen((o) => !o)} className="flex items-center justify-between w-full text-[11px] text-[var(--color-ink-faint)]">
+        <span>RPE{rpe.overall != null ? `: ${rpe.overall}` : " — log effort"}</span>
+        <span>{open ? "▴" : "▾"}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          <RpeScale value={rpe.overall} onChange={(v) => update({ ...rpe, overall: v })} size="sm" />
+          {a.plan && a.plan.intervals.length > 0 && (
+            <details>
+              <summary className="text-[10px] text-[var(--color-cyan)] cursor-pointer">per-interval</summary>
+              <div className="mt-2 space-y-2">
+                {a.plan.intervals.map((iv, i) => (
+                  <div key={iv.id}>
+                    <div className="text-[10px] text-[var(--color-ink-dim)] mb-1">{iv.name}</div>
+                    <RpeScale value={rpe.perSegment?.[i] ?? null} onChange={(v) => update({ ...rpe, perSegment: { ...(rpe.perSegment ?? {}), [i]: v } })} size="sm" />
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
     </div>
   );
 }

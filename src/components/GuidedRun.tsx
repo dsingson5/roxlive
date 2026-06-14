@@ -12,7 +12,9 @@ export function GuidedRun({
   hr,
   sourceLive,
   simulated,
+  paused,
   onStart,
+  onPause,
   onConnect,
   onSimulate,
   onEdit,
@@ -25,7 +27,9 @@ export function GuidedRun({
   sourceLive: boolean;
   /** true when the live source is the simulator (vs a real sensor) */
   simulated: boolean;
+  paused: boolean;
   onStart: () => void;
+  onPause: () => void;
   onConnect: () => void;
   onSimulate: () => void;
   onEdit: () => void;
@@ -70,7 +74,7 @@ export function GuidedRun({
         )}
 
         {state.phase === "running" && iv && (
-          <motion.div key="running" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex-1 flex flex-col">
+          <motion.div key="running" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex-1 flex flex-col relative">
             <div className="flex items-center gap-5 mt-1">
               <RadialGauge value={1 - state.fraction} min={0} max={1} size={150} thickness={11} color={kindColor}>
                 <div className="text-center">
@@ -101,17 +105,32 @@ export function GuidedRun({
 
             <TargetMeter state={state} hr={hr} />
 
-            <div className="mt-auto flex items-center justify-between pt-3">
-              <div className="text-[11px] text-[var(--color-ink-faint)]">
+            <div className="mt-auto flex items-center justify-between gap-2 pt-3">
+              <button
+                onClick={onPause}
+                className="btn-ghost h-8 px-3 text-[12px] shrink-0"
+                style={paused ? { borderColor: "var(--color-volt)", color: "var(--color-volt)" } : undefined}
+              >
+                {paused ? "▶ Resume" : "❚❚ Pause"}
+              </button>
+              <div className="text-[11px] text-[var(--color-ink-faint)] flex-1 text-right truncate">
                 {state.nextInterval ? <>Next: <span className="text-[var(--color-ink-dim)]">{state.nextInterval.name}</span></> : "Final interval"}
               </div>
               {state.adherencePct != null && (
-                <div className="text-[11px] mono">
-                  <span className="text-[var(--color-ink-faint)]">in target </span>
+                <div className="text-[11px] mono shrink-0">
                   <span style={{ color: state.adherencePct >= 70 ? "var(--color-mint)" : "var(--color-amber)" }}>{Math.round(state.adherencePct)}%</span>
                 </div>
               )}
             </div>
+
+            {paused && (
+              <div className="absolute inset-0 grid place-items-center pointer-events-none" style={{ background: "rgba(7,8,10,0.55)", backdropFilter: "blur(1px)" }}>
+                <div className="text-center">
+                  <div className="num text-3xl font-bold" style={{ color: "var(--color-volt)" }}>PAUSED</div>
+                  <div className="text-[11px] text-[var(--color-ink-dim)] mt-1">heart rate still recording{hr != null ? ` · ♥ ${hr}` : ""}</div>
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
 

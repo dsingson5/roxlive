@@ -14,6 +14,9 @@ export function TopBar({
   onStop,
   onSettings,
   onHistory,
+  onPiP,
+  pipActive,
+  pipSupported,
   supported,
 }: {
   snap: MetricsSnapshot;
@@ -26,6 +29,9 @@ export function TopBar({
   onStop: () => void;
   onSettings: () => void;
   onHistory: () => void;
+  onPiP: () => void;
+  pipActive: boolean;
+  pipSupported: boolean;
   supported: boolean;
 }) {
   const live = mode !== "idle";
@@ -84,6 +90,16 @@ export function TopBar({
           ) : (
             <button onClick={onStop} className="btn-ghost px-4 h-9 text-sm flex items-center gap-1.5" style={{ borderColor: "rgba(255,77,77,0.4)", color: "var(--color-red)" }}>
               <StopIcon /> Stop
+            </button>
+          )}
+          {pipSupported && (
+            <button
+              onClick={onPiP}
+              className="btn-ghost w-9 h-9 grid place-items-center"
+              title="Pop out a floating mini window (watch over other apps)"
+              style={pipActive ? { borderColor: "var(--color-volt)", color: "var(--color-volt)" } : undefined}
+            >
+              <PiPIcon />
             </button>
           )}
           <button onClick={onHistory} className="btn-ghost w-9 h-9 grid place-items-center" title="Workout history">
@@ -180,3 +196,4 @@ const StopIcon = () => (<svg width="12" height="12" viewBox="0 0 24 24" fill="cu
 const BtIcon = () => (<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m7 7 10 10-5 5V2l5 5L7 17" /></svg>);
 const GearIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>);
 const HistoryIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v5h5" /><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" /><path d="M12 7v5l4 2" /></svg>);
+const PiPIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" /><rect x="12" y="12" width="8" height="6" rx="1" fill="currentColor" stroke="none" /></svg>);

@@ -117,6 +117,7 @@ function HistoryRow({ s, onOpen, onDelete }: { s: SessionSummary; onOpen: () => 
               <span style={{ color: s.adherencePct >= 70 ? "var(--color-mint)" : "var(--color-amber)" }}>{Math.round(s.adherencePct)}% in zone</span>
             )}
             {s.minAlpha1 != null && <span className="text-[var(--color-cyan)]">α1 {s.minAlpha1.toFixed(2)}</span>}
+            {s.rpe?.overall != null && <span className="text-[var(--color-amber)]">RPE {s.rpe.overall}</span>}
           </div>
         </button>
 

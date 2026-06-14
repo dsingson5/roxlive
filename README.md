@@ -107,6 +107,16 @@ Beyond HR + R-R, the app also reads **running cadence** (RSC 0x1814) and
 available, and shows pace (from GPS) + cadence + temperature live. The
 simulator produces all of these too.
 
+## Pause, pop-out & RPE
+
+- **Pause** any workout (per-athlete in Squad) — the plan clock, countdown and
+  voice freeze while your heart rate keeps recording.
+- **Pop-out mini window** (top-bar button) — a borderless Picture-in-Picture
+  window floats your essentials (HR, zone, interval + countdown; squad list)
+  over YouTube etc., on desktop *and* mobile.
+- **RPE log** after a session — rate perceived exertion 1–10 overall and
+  per-interval (per-athlete in Squad); saved to History.
+
 ## Countdown coaching
 
 In the final **3·2·1 seconds** of any interval (workout) or segment (HYROX) a

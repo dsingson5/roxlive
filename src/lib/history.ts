@@ -53,6 +53,13 @@ export function deleteFromHistory(id: string): SessionSummary[] {
   return list;
 }
 
+/** Merge a partial update into a saved session (e.g. RPE logged after the fact). */
+export function updateHistory(id: string, patch: Partial<SessionSummary>): SessionSummary[] {
+  const list = loadHistory().map((s) => (s.id === id ? { ...s, ...patch } : s));
+  save(list);
+  return list;
+}
+
 export function clearHistory(): SessionSummary[] {
   try {
     localStorage.removeItem(KEY);

@@ -296,12 +296,21 @@ export interface IntervalAdherence {
 /* Session persistence                                                 */
 /* ------------------------------------------------------------------ */
 
+/** Rate of Perceived Exertion (CR10, 1-10) for a session + optional per-segment. */
+export interface RpeLog {
+  overall: number | null;
+  /** keyed by segment index → 1-10 */
+  perSegment?: Record<number, number>;
+}
+
 export interface SessionSummary {
   id: string;
   startedAt: number;
   endedAt: number;
   durationSec: number;
   mode: "free" | "hyrox" | "workout";
+  /** post-workout perceived exertion */
+  rpe?: RpeLog;
   /** workout-mode only: overall % of time spent inside target HR bands */
   adherencePct?: number | null;
   /** workout-mode only: the plan that was run */
