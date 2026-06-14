@@ -33,8 +33,11 @@ import {
   changePassword as syncChangePassword,
   clearSession,
   sessionUser,
+  isAdminUser,
   type SyncConfig,
 } from "./lib/sync";
+import { logActivity, flushActivity } from "./lib/activity";
+import { AdminPanel } from "./components/AdminPanel";
 import * as strava from "./lib/strava";
 import { TopBar } from "./components/TopBar";
 import { HeroHR, DfaGauge } from "./components/HeroPanels";
@@ -75,6 +78,7 @@ export default function App() {
   const [history, setHistory] = useState<SessionSummary[]>(() => loadHistory());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDetail, setHistoryDetail] = useState<SessionSummary | null>(null);
+  const [adminOpen, setAdminOpen] = useState(false);
 
   // Cross-device sync: a signed-in athlete's history follows them to any device.
   // Auth is a real password (server-verified) → a signed session token.
@@ -129,14 +133,14 @@ export default function App() {
     }
     window.location.reload();
   }, []);
-  // Pull on load (once the athlete is known + a session exists).
+  // Pull on load (once the athlete is known + a session exists); note the visit.
   useEffect(() => {
     syncNow();
+    if (sessionUser()) logActivity("open");
   }, [syncNow]);
-  // Flush any debounced cloud push before the tab is backgrounded/closed, so a
-  // workout saved seconds earlier still reaches the cloud.
+  // Flush debounced cloud push + activity before the tab is backgrounded/closed.
   useEffect(() => {
-    const flush = () => flushPendingPushes();
+    const flush = () => { flushPendingPushes(); flushActivity(); };
     const onVis = () => { if (document.visibilityState === "hidden") flush(); };
     window.addEventListener("pagehide", flush);
     document.addEventListener("visibilitychange", onVis);
@@ -337,6 +341,7 @@ export default function App() {
    */
   const handleStartWorkout = () => {
     if (!plan || eng.mode === "idle") return;
+    logActivity("workout_start", plan.title);
     runner.coach.prime(); // user gesture: unlock speech synthesis + audio
     const t = performance.timeOrigin + performance.now();
     pausedAtRef.current = null;
@@ -347,6 +352,7 @@ export default function App() {
   };
 
   const handleModeChange = (m: "free" | "hyrox" | "workout" | "squad") => {
+    if (m !== raceMode) logActivity("mode", m);
     const leavingSquad = raceMode === "squad" && m !== "squad";
     if (leavingSquad) squad.stopAll();
     if (m === "squad" && eng.mode !== "idle") eng.stop(); // free the solo session
@@ -533,6 +539,7 @@ export default function App() {
     if (s.durationSec >= 5 && (s.avgHr != null || s.distanceM > 0)) {
       addToHistory(s);
       setHistory(loadHistory());
+      logActivity("workout_done", `${s.modality ?? s.mode} · ${Math.round(s.durationSec / 60)}m`);
     }
     setSummary(s);
   };
@@ -596,7 +603,8 @@ export default function App() {
         onDemo={handleDemo}
         onStop={handleStop}
         onSettings={() => setSettingsOpen(true)}
-        onHistory={() => { setHistory(loadHistory()); setHistoryOpen(true); syncNow(); }}
+        onHistory={() => { setHistory(loadHistory()); setHistoryOpen(true); syncNow(); logActivity("history_view"); }}
+        onAdmin={isAdminUser(crewUser) && signedIn ? () => setAdminOpen(true) : undefined}
         onPiP={pip.toggle}
         pipActive={pip.active}
         pipSupported={pip.supported}
@@ -813,6 +821,9 @@ export default function App() {
         onDelete={(id) => setHistory(deleteFromHistory(id))}
         onClear={() => setHistory(clearHistory())}
       />
+
+      {/* Coach-only crew dashboard (david). */}
+      <AdminPanel open={adminOpen} profile={profile} onClose={() => setAdminOpen(false)} />
 
       {/* Huge 3-2-1 countdown for the end of the current interval / segment. */}
       <CountdownOverlay seconds={countdown.seconds} label={countdown.label} />

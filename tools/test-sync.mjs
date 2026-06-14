@@ -61,7 +61,9 @@ ok("fresh token works -> 200", (await J("GET", "/history?user=david", { headers:
 const fTok = await tok("fayth", "fayth");
 ok("no token -> 401", (await J("GET", "/history?user=david")).status === 401);
 ok("tampered token -> 401", (await J("GET", "/history?user=david", { headers: bearer(dTok.slice(0, -2) + "xy") })).status === 401);
-ok("david token for fayth -> 401 (isolation)", (await J("GET", "/history?user=fayth", { headers: bearer(dTok) })).status === 401);
+ok("non-admin fayth -> david history -> 403 (isolation)", (await J("GET", "/history?user=david", { headers: bearer(fTok) })).status === 403);
+ok("admin david -> fayth history -> 200 (override)", (await J("GET", "/history?user=fayth", { headers: bearer(dTok) })).status === 200);
+ok("admin david -> PUT fayth history -> 403 (writes own-only)", (await J("PUT", "/history?user=fayth", { headers: bearer(dTok), body: { sessions: [], tombstones: {} } })).status === 403);
 
 // 5. merge / tombstones / RPE --------------------------------------------------
 const mk = (id, ended, rpe) => ({ id, endedAt: ended, durationSec: 1, mode: "workout", ...(rpe ? { rpe } : {}) });
@@ -91,7 +93,17 @@ await J("PUT", "/history?user=erika", { headers: bearer(eTok), raw: '{"sessions"
 { const ids = (await getE()).map((s) => s.id).sort().join();
   ok("built-in-name ids can be tombstoned", ids === "normal"); }
 
-// 7. body guard ----------------------------------------------------------------
+// 7. activity + admin ----------------------------------------------------------
+ok("activity post (own) -> 200", (await J("POST", "/activity", { headers: bearer(fTok), body: { events: [{ type: "open" }, { type: "mode", detail: "hyrox" }] } })).status === 200);
+ok("activity no token -> 401", (await J("POST", "/activity", { body: { events: [{ type: "x" }] } })).status === 401);
+{ const r = await J("GET", "/admin/roster", { headers: bearer(dTok) }); const d = await r.json();
+  ok("admin roster (david) -> 200 + all crew", r.status === 200 && Array.isArray(d.roster) && d.roster.length === 10); }
+ok("admin roster (non-admin fayth) -> 403", (await J("GET", "/admin/roster", { headers: bearer(fTok) })).status === 403);
+{ const r = await J("GET", "/admin/activity?user=fayth", { headers: bearer(dTok) }); const d = await r.json();
+  ok("admin activity (david->fayth) -> 200 incl login", r.status === 200 && Array.isArray(d.events) && d.events.some((e) => e.type === "login")); }
+ok("admin activity (non-admin) -> 403", (await J("GET", "/admin/activity?user=david", { headers: bearer(fTok) })).status === 403);
+
+// 8. body guard ----------------------------------------------------------------
 ok("oversized body -> 413", (await J("PUT", "/history?user=david", { headers: bearer(dTok), body: { sessions: [], pad: "x".repeat(6 * 1024 * 1024) } })).status === 413);
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -137,6 +137,94 @@ export async function changePassword(
   }
 }
 
+/* ----------------------------- activity + admin -------------------------- */
+
+// The coach account(s) that may read every athlete's data (mirrors ADMIN in
+// sync/worker.js — the server enforces it; this only gates client UI).
+export const ADMIN_USERS = ["david"];
+export function isAdminUser(user: string | null | undefined): boolean {
+  return !!user && ADMIN_USERS.includes(user);
+}
+
+export interface ActivityEvent {
+  t: number;
+  type: string;
+  detail?: string;
+}
+export interface RosterEntry {
+  user: string;
+  enrolled: boolean;
+  mustChange: boolean;
+  lastLogin: number;
+  loginCount: number;
+  lastActive: number;
+  eventCount: number;
+  workoutCount: number;
+  lastWorkout: number;
+}
+
+/** Send a batch of activity events for the signed-in athlete (best-effort). */
+export async function postActivity(events: { type: string; detail?: string }[]): Promise<void> {
+  const t = loadSession();
+  if (!t || !events.length) return;
+  const { url } = loadSyncConfig();
+  try {
+    await fetch(`${url}/activity`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${t}`, "content-type": "application/json" },
+      body: JSON.stringify({ events }),
+      keepalive: true,
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Admin: the crew roster with per-athlete activity/workout summary. */
+export async function fetchRoster(): Promise<RosterEntry[] | null> {
+  const t = loadSession();
+  if (!t) return null;
+  const { url } = loadSyncConfig();
+  try {
+    const res = await fetch(`${url}/admin/roster`, { headers: { authorization: `Bearer ${t}` } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data?.roster) ? (data.roster as RosterEntry[]) : [];
+  } catch {
+    return null;
+  }
+}
+
+/** Admin: an athlete's activity feed (newest first). */
+export async function fetchUserActivity(user: string): Promise<ActivityEvent[] | null> {
+  const t = loadSession();
+  if (!t) return null;
+  const { url } = loadSyncConfig();
+  try {
+    const res = await fetch(`${url}/admin/activity?user=${encodeURIComponent(user)}`, { headers: { authorization: `Bearer ${t}` } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data?.events) ? (data.events as ActivityEvent[]) : [];
+  } catch {
+    return null;
+  }
+}
+
+/** Admin: an athlete's full workout history (server allows admin to read any). */
+export async function fetchUserHistory(user: string): Promise<SessionSummary[] | null> {
+  const t = loadSession();
+  if (!t) return null;
+  const { url } = loadSyncConfig();
+  try {
+    const res = await fetch(`${url}/history?user=${encodeURIComponent(user)}`, { headers: { authorization: `Bearer ${t}` } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data?.sessions) ? (data.sessions as SessionSummary[]) : [];
+  } catch {
+    return null;
+  }
+}
+
 /* -------------------------------- sync I/O ------------------------------- */
 
 function endpoint(url: string, user: string): string {
