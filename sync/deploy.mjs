@@ -7,22 +7,22 @@
  * It will (using the wrangler CLI):
  *   1. log you in if needed (opens a browser — authorize there),
  *   2. create the KV namespace (or reuse it) and write its id into sync/wrangler.toml,
- *   3. generate + set the SYNC_KEY secret (saved locally to sync/.sync-key.txt),
- *   4. deploy the Worker,
- *   5. print the Sync URL + key to paste into RoxLive → Settings → Cross-device sync.
+ *   3. deploy the Worker,
+ *   4. print the Worker URL.
  *
- * Re-running is safe: it reuses the existing namespace and key.
+ * The Worker is keyless (gated by the crew allow-list + site origin), so there's
+ * no secret to set and nothing to paste into the app — sync is automatic for any
+ * signed-in crew athlete once the built-in URL in src/lib/sync.ts points here.
+ * Re-running is safe: it reuses the existing namespace.
  */
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const SYNC_DIR = dirname(fileURLToPath(import.meta.url));
 const TOML = join(SYNC_DIR, "wrangler.toml");
-const KEY_FILE = join(SYNC_DIR, ".sync-key.txt");
 // shell:true is required on Windows + Node 22 to launch the npx.cmd shim (and is
 // harmless elsewhere). The one-time "UV_HANDLE_CLOSING" line some Windows setups
 // print is benign teardown noise, not a crash.
@@ -79,38 +79,20 @@ toml = toml
   .replace(/id\s*=\s*"[0-9a-fA-F]{32}"/, `id = "${kvId}"`);
 writeFileSync(TOML, toml);
 
-// 4. SYNC_KEY secret ----------------------------------------------------------
-step("Setting the SYNC_KEY secret…");
-let key = existsSync(KEY_FILE) ? readFileSync(KEY_FILE, "utf8").trim() : "";
-if (!key) {
-  key = randomBytes(24).toString("base64url");
-  writeFileSync(KEY_FILE, key);
-}
-const sec = spawnSync(NPX, ["--yes", "wrangler", "secret", "put", "SYNC_KEY"], {
-  cwd: SYNC_DIR,
-  input: key + "\n",
-  stdio: ["pipe", "inherit", "inherit"],
-});
-if (sec.status !== 0) {
-  console.error("Failed to set SYNC_KEY — see wrangler output above.");
-  process.exit(1);
-}
-
-// 5. Deploy -------------------------------------------------------------------
+// 4. Deploy -------------------------------------------------------------------
 step("Deploying the Worker…");
 const deployOut = cap(["deploy"]);
 console.log(deployOut);
 const urlMatch = deployOut.match(/https:\/\/[^\s]+\.workers\.dev/);
 
-// 6. Done ---------------------------------------------------------------------
+// 5. Done ---------------------------------------------------------------------
 console.log("\n========================================================");
-console.log("  Cross-device sync deployed. In RoxLive on EACH device:");
-console.log("  Settings (gear) -> Cross-device sync");
+console.log("  Sync Worker deployed (keyless — gated by crew allow-list).");
+console.log(`  URL: ${urlMatch ? urlMatch[0] : "https://roxlive-sync.<your-subdomain>.workers.dev"}`);
 console.log("");
-console.log(`    Sync URL:  ${urlMatch ? urlMatch[0] : "https://roxlive-sync.<your-subdomain>.workers.dev"}`);
-console.log(`    Sync key:  ${key}`);
-console.log("");
-console.log("  The key is also saved in sync/.sync-key.txt (git-ignored).");
-console.log("  Optional — commit the filled-in config so it's saved:");
+console.log("  Make sure DEFAULT_SYNC_URL in src/lib/sync.ts points to this URL,");
+console.log("  then rebuild + push. Sync is then automatic for every signed-in");
+console.log("  crew athlete — no per-device setup.");
+console.log("  Optional — save the KV id config:");
 console.log('    git add sync/wrangler.toml && git commit -m "sync: KV id" && git push');
 console.log("========================================================");

@@ -15,27 +15,43 @@
  * can't resurrect a removed session. The store keeps a generous cap; the client
  * shows fewer, so the cloud never prunes below what any device has held.
  *
- * Auth: every request must send  Authorization: Bearer <SYNC_KEY>  matching the
- * Worker secret. The key is shared by the crew and lives in each member's browser
- * (entered once in RoxLive → Settings → Cross-device sync); it keeps the random
- * internet out, but is not a hard secret — treat the data as crew-visible.
+ * Access model (matches the Hybrid Crew hub's name-based gate, so sync needs NO
+ * per-device setup): a request is allowed when the `user` is a known crew member
+ * AND, for browser requests, the Origin matches ALLOW_ORIGIN. There is no shared
+ * client secret to ship in the public bundle. An OPTIONAL SYNC_KEY is still
+ * honored — if you set that secret AND a client sends a matching Bearer token,
+ * fine; clients that send no token are allowed (keyless). Treat the data as
+ * crew-visible: this is a convenience store for low-sensitivity workout metrics,
+ * gated the same way the hub itself is.
  *
  * Setup (see sync/README.md):
  *   1. Create a KV namespace and bind it as  HISTORY.
- *   2. Set the secret  SYNC_KEY  (wrangler secret put SYNC_KEY).
- *   3. Optional:  ALLOW_ORIGIN  (defaults to "*").
+ *   2. Optional:  ALLOW_ORIGIN  (defaults to "*"); set it to your site to lock CORS.
  */
 
 const USER_RE = /^[a-z0-9-]{1,40}$/;
+// Mirrors hybrid-crew/enter.html + src/lib/user.ts. Only these buckets exist.
+const CREW = new Set([
+  "david",
+  "carla",
+  "erika",
+  "liz",
+  "marianne",
+  "aleena",
+  "fayth",
+  "aura",
+  "levelshyroxpt-sample",
+  "ommohyroxpc-sample",
+]);
 const SERVER_MAX = 200; // cloud keeps far more than the client shows (50)
 const TOMB_MAX = 1000;
 const MAX_BODY_BYTES = 5 * 1024 * 1024; // 5 MB hard cap (measured, not declared)
 
 export default {
   async fetch(request, env) {
-    const origin = env.ALLOW_ORIGIN || "*";
+    const allowOrigin = env.ALLOW_ORIGIN || "*";
     const cors = {
-      "Access-Control-Allow-Origin": origin,
+      "Access-Control-Allow-Origin": allowOrigin,
       "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
       "Access-Control-Allow-Headers": "content-type, authorization",
       "Access-Control-Max-Age": "86400",
@@ -44,18 +60,26 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
     if (!env.HISTORY) return json({ error: "Worker missing HISTORY KV binding" }, 500, cors);
-    if (!env.SYNC_KEY) return json({ error: "Worker missing SYNC_KEY secret" }, 500, cors);
 
-    // Auth — plain compare against the required secret (shared crew key).
+    // Browser requests must come from the configured site (blocks cross-site use).
+    const reqOrigin = request.headers.get("Origin");
+    if (reqOrigin && allowOrigin !== "*" && reqOrigin !== allowOrigin) {
+      return json({ error: "forbidden origin" }, 403, cors);
+    }
+
+    // Optional shared key: only enforced if you've set SYNC_KEY *and* the client
+    // sends one. Keyless clients are allowed (the crew allow-list is the gate).
     const authz = request.headers.get("authorization") || "";
     const token = authz.startsWith("Bearer ") ? authz.slice(7) : "";
-    if (!token || token !== env.SYNC_KEY) return json({ error: "unauthorized" }, 401, cors);
+    if (token && env.SYNC_KEY && token !== env.SYNC_KEY) {
+      return json({ error: "unauthorized" }, 401, cors);
+    }
 
     const url = new URL(request.url);
     if (url.pathname !== "/history") return json({ error: "not found" }, 404, cors);
 
     const user = (url.searchParams.get("user") || "").toLowerCase();
-    if (!USER_RE.test(user)) return json({ error: "bad or missing user" }, 400, cors);
+    if (!USER_RE.test(user) || !CREW.has(user)) return json({ error: "unknown user" }, 403, cors);
     const key = `hist:${user}`;
 
     try {

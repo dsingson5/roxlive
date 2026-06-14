@@ -22,6 +22,12 @@ const URL_KEY = "roxlive.sync.url";
 const KEY_KEY = "roxlive.sync.key";
 const MAX = 50; // keep in step with lib/history.ts
 
+// Built-in endpoint so cross-device sync is ON automatically for every signed-in
+// crew athlete — no per-device setup. The Worker gates access by the crew
+// allow-list + site origin (see sync/worker.js), so there is no secret here.
+// Power users can still point at a private worker / add a key in Settings.
+const DEFAULT_SYNC_URL = "https://roxlive-sync.david-singson.workers.dev";
+
 export type Tombstones = Record<string, number>;
 export interface RemoteHistory {
   sessions: SessionSummary[];
@@ -35,9 +41,14 @@ export interface SyncConfig {
 
 export function loadSyncConfig(): SyncConfig {
   try {
-    return { url: localStorage.getItem(URL_KEY) || "", key: localStorage.getItem(KEY_KEY) || "" };
+    // A localStorage override wins; otherwise fall back to the built-in endpoint
+    // so sync works out of the box. Key is optional (the worker is keyless).
+    return {
+      url: (localStorage.getItem(URL_KEY) || "").trim() || DEFAULT_SYNC_URL,
+      key: (localStorage.getItem(KEY_KEY) || "").trim(),
+    };
   } catch {
-    return { url: "", key: "" };
+    return { url: DEFAULT_SYNC_URL, key: "" };
   }
 }
 
@@ -51,11 +62,16 @@ export function saveSyncConfig(c: SyncConfig): void {
 }
 
 export function isSyncConfigured(c: SyncConfig = loadSyncConfig()): boolean {
-  return !!c.url && !!c.key;
+  return !!c.url; // a URL always resolves (built-in default) → sync is on for crew
 }
 
 function endpoint(c: SyncConfig, user: string): string {
   return `${c.url}/history?user=${encodeURIComponent(user)}`;
+}
+
+/** Auth header only when an optional key override is set (worker is keyless). */
+function authHeaders(c: SyncConfig): Record<string, string> {
+  return c.key ? { authorization: `Bearer ${c.key}` } : {};
 }
 
 /**
@@ -66,7 +82,7 @@ export async function pullHistory(user: string | null): Promise<RemoteHistory | 
   const c = loadSyncConfig();
   if (!user || !isSyncConfigured(c)) return null;
   try {
-    const res = await fetch(endpoint(c, user), { headers: { authorization: `Bearer ${c.key}` } });
+    const res = await fetch(endpoint(c, user), { headers: authHeaders(c) });
     if (!res.ok) return null;
     const data = await res.json();
     return {
@@ -83,7 +99,7 @@ async function putHistory(user: string, sessions: SessionSummary[], tombstones: 
   if (!isSyncConfigured(c)) return;
   await fetch(endpoint(c, user), {
     method: "PUT",
-    headers: { authorization: `Bearer ${c.key}`, "content-type": "application/json" },
+    headers: { ...authHeaders(c), "content-type": "application/json" },
     body: JSON.stringify({ sessions: sessions.slice(0, MAX), tombstones }),
     keepalive: true, // let a push begun on unload still complete
   });
