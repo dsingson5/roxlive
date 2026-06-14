@@ -20,6 +20,7 @@ const MODE_COLOR: Record<SessionSummary["mode"], string> = {
 export function HistoryModal({
   open,
   sessions,
+  userLabel,
   onClose,
   onOpen,
   onDelete,
@@ -27,6 +28,8 @@ export function HistoryModal({
 }: {
   open: boolean;
   sessions: SessionSummary[];
+  /** signed-in Hybrid Crew athlete, e.g. "David" — empty when anonymous */
+  userLabel?: string;
   onClose: () => void;
   onOpen: (s: SessionSummary) => void;
   onDelete: (id: string) => void;
@@ -56,10 +59,13 @@ export function HistoryModal({
             transition={{ type: "spring", stiffness: 360, damping: 36 }}
           >
             <div className="flex items-center justify-between mb-1">
-              <h2 className="font-[var(--font-display)] text-xl font-bold">Workout History</h2>
+              <h2 className="font-[var(--font-display)] text-xl font-bold">
+                {userLabel ? `${userLabel}'s History` : "Workout History"}
+              </h2>
               <button onClick={onClose} className="btn-ghost w-8 h-8 grid place-items-center text-lg">×</button>
             </div>
             <p className="text-[12px] text-[var(--color-ink-faint)] mb-4">
+              {userLabel && <span className="text-[var(--color-volt)]">✦ {userLabel} · </span>}
               {sessions.length === 0
                 ? "No sessions yet — finished workouts will appear here."
                 : `${sessions.length} saved session${sessions.length === 1 ? "" : "s"} · stored on this device`}

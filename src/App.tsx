@@ -23,6 +23,7 @@ import { cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan } from "./
 import { VISION_MODELS } from "./lib/vision";
 import { VoiceCoach } from "./lib/voice";
 import { addToHistory, clearHistory, deleteFromHistory, loadHistory, updateHistory } from "./lib/history";
+import { resolveCrewUser, prettyUser } from "./lib/user";
 import * as strava from "./lib/strava";
 import { TopBar } from "./components/TopBar";
 import { HeroHR, DfaGauge } from "./components/HeroPanels";
@@ -56,7 +57,10 @@ export default function App() {
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [manualFocus, setManualFocus] = useState<number | null>(null);
 
-  // Workout history (persisted locally).
+  // Signed-in Hybrid Crew athlete (same-origin hub) — scopes saved history.
+  const crewUser = useMemo(() => resolveCrewUser(), []);
+
+  // Workout history (persisted locally, per crew user when signed in).
   const [history, setHistory] = useState<SessionSummary[]>(() => loadHistory());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDetail, setHistoryDetail] = useState<SessionSummary | null>(null);
@@ -555,7 +559,12 @@ export default function App() {
               startAll: squad.startAll,
               stopAll: squad.stopAll,
               pauseAthlete: squad.pauseAthlete,
-              logRpe: squad.logAthleteRpe,
+              logRpe: (id, rpe) => {
+                squad.logAthleteRpe(id, rpe);
+                // squad RPE is persisted inside the hook; refresh the in-memory
+                // list so an already-open History modal reflects it immediately.
+                setHistory(loadHistory());
+              },
             }}
           />
         ) : (
@@ -704,6 +713,7 @@ export default function App() {
       <HistoryModal
         open={historyOpen}
         sessions={history}
+        userLabel={prettyUser(crewUser)}
         onClose={() => setHistoryOpen(false)}
         onOpen={(s) => setHistoryDetail(s)}
         onDelete={(id) => setHistory(deleteFromHistory(id))}
