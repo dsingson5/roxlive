@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { RpeLog, SeriesPoint, SessionSummary } from "../types";
 import type { PostResult } from "../lib/strava";
+import { modalityDef } from "../lib/modality";
 import { Sparkline } from "./Charts";
 import { ZONE_DEFS } from "../lib/zones";
 import { downloadFit } from "../lib/fit";
@@ -48,8 +49,15 @@ export function SummaryModal({
                 <h2 className="font-[var(--font-display)] text-2xl font-bold">Session Complete</h2>
                 <button onClick={onClose} className="btn-ghost w-8 h-8 grid place-items-center text-lg">×</button>
               </div>
-              <div className="mono text-[11px] text-[var(--color-ink-faint)] mb-5">
-                {summary.mode === "hyrox" ? "HYROX simulation" : summary.mode === "workout" ? summary.planTitle ?? "Guided workout" : "Free analyzer"} · {fmtClock(summary.durationSec)}
+              <div className="flex items-center gap-2 flex-wrap mb-5">
+                <div className="mono text-[11px] text-[var(--color-ink-faint)]">
+                  {summary.mode === "hyrox" ? "HYROX simulation" : summary.mode === "workout" ? summary.planTitle ?? "Guided workout" : "Free analyzer"} · {fmtClock(summary.durationSec)}
+                </div>
+                {summary.modality && (
+                  <span className="inline-flex items-center gap-1 px-2 h-5 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-line)] text-[10px] text-[var(--color-ink-dim)]">
+                    {modalityDef(summary.modality).glyph} {modalityDef(summary.modality).label}
+                  </span>
+                )}
               </div>
 
               {summary.mode === "workout" && summary.adherencePct != null && (

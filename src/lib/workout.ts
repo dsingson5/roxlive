@@ -13,6 +13,7 @@ import type {
   WorkoutIntervalKind,
   WorkoutPlan,
 } from "../types";
+import { guessModality, type Modality } from "./modality";
 import { zoneBounds } from "./zones";
 
 let idSeq = 0;
@@ -146,13 +147,15 @@ export function cumulativeEnds(plan: WorkoutPlan): number[] {
 }
 
 export function newInterval(partial?: Partial<WorkoutInterval>): WorkoutInterval {
+  const name = partial?.name ?? "New interval";
   return {
     id: uid("iv"),
-    name: partial?.name ?? "New interval",
+    name,
     kind: partial?.kind ?? "work",
     durationSec: partial?.durationSec ?? 60,
     target: partial?.target ?? { type: "zone", zone: 3 },
     notes: partial?.notes,
+    modality: partial?.modality ?? guessModality(name),
   };
 }
 
@@ -173,14 +176,20 @@ export function adoptParsed(parsed: ParsedWorkout, source: WorkoutPlan["source"]
       durationSec: clampDur(iv.durationSec),
       target,
       notes: iv.notes,
+      modality: guessModality(iv.name ?? ""),
     };
   });
+  const list = intervals.length ? intervals : [newInterval()];
+  // If every interval resolves to the same movement it's a single-sport session;
+  // otherwise treat it as a mixed (per-interval) plan — HYROX/CrossFit style.
+  const distinct = new Set(list.map((iv) => iv.modality));
   return {
     id: uid("plan"),
     title: parsed.title?.trim() || "Imported workout",
     source,
     createdAt: Math.round(performance.timeOrigin + performance.now()),
-    intervals: intervals.length ? intervals : [newInterval()],
+    intervals: list,
+    modality: distinct.size === 1 ? [...distinct][0] : "mixed",
   };
 }
 
@@ -218,12 +227,14 @@ export function samplePlans(): WorkoutPlan[] {
   const now = Math.round(performance.timeOrigin + performance.now());
   const mk = (
     title: string,
-    rows: [string, WorkoutIntervalKind, number, IntervalTarget, string?][]
+    rows: [string, WorkoutIntervalKind, number, IntervalTarget, string?][],
+    modality: Modality = "run"
   ): WorkoutPlan => ({
     id: uid("plan"),
     title,
     source: "sample",
     createdAt: now,
+    modality,
     intervals: rows.map(([name, kind, durationSec, target, notes]) => ({
       id: uid("iv"),
       name,
@@ -231,6 +242,8 @@ export function samplePlans(): WorkoutPlan[] {
       durationSec,
       target,
       notes,
+      // single-sport samples: every interval is the plan's modality
+      modality,
     })),
   });
 

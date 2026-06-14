@@ -16,6 +16,7 @@ import {
   adoptParsed,
 } from "../lib/workout";
 import { VISION_MODELS, fileToBase64, parseWorkoutImage } from "../lib/vision";
+import { SINGLE_MODALITIES, guessModality, type Modality } from "../lib/modality";
 import { VoiceCoach, guessGender, loadVoices, speechSupported } from "../lib/voice";
 import { fmtClock } from "../lib/format";
 
@@ -130,6 +131,19 @@ export function WorkoutBuilder({
       return { ...d, intervals: arr };
     });
 
+  const setSessionType = (mode: "single" | "mixed") =>
+    setDraft((d) => {
+      if (mode === "mixed") {
+        // ensure each interval has a movement type (best-effort from its name)
+        return {
+          ...d,
+          modality: "mixed",
+          intervals: d.intervals.map((iv) => ({ ...iv, modality: iv.modality ?? guessModality(iv.name) })),
+        };
+      }
+      return { ...d, modality: d.modality === "mixed" || !d.modality ? "run" : d.modality };
+    });
+
   return (
     <AnimatePresence>
       {open && (
@@ -199,10 +213,46 @@ export function WorkoutBuilder({
               </Section>
 
               {/* ---- Editor ---- */}
-              <Section title="2 · Review & edit">
+              <Section title="2 · Classify & edit">
                 <div className="flex items-center gap-3 mb-3">
                   <input value={draft.title} onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} className="inp flex-1 font-semibold" placeholder="Workout title" />
                   <div className="mono text-[12px] text-[var(--color-ink-dim)] shrink-0">{fmtClock(total)} · {draft.intervals.length} steps</div>
+                </div>
+
+                {/* session type / modality */}
+                <div className="rounded-xl bg-white/[0.025] border border-[var(--color-line)] p-2.5 mb-3">
+                  <div className="text-[10px] tracking-[0.12em] uppercase text-[var(--color-ink-faint)] mb-1.5">Session type</div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex bg-white/[0.04] rounded-lg p-0.5 border border-[var(--color-line)]">
+                      {(["single", "mixed"] as const).map((mode) => {
+                        const active = mode === "mixed" ? draft.modality === "mixed" : draft.modality !== "mixed";
+                        return (
+                          <button
+                            key={mode}
+                            onClick={() => setSessionType(mode)}
+                            className="px-3 h-8 rounded-md text-[12px] font-semibold transition-colors"
+                            style={{ background: active ? "var(--color-volt)" : "transparent", color: active ? "#0b0c06" : "var(--color-ink-dim)" }}
+                          >
+                            {mode === "single" ? "One sport" : "Mixed / per-interval"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {draft.modality !== "mixed" && (
+                      <select
+                        value={draft.modality ?? "run"}
+                        onChange={(e) => setDraft((d) => ({ ...d, modality: e.target.value as Modality }))}
+                        className="inp h-8 w-[150px]"
+                      >
+                        {SINGLE_MODALITIES.map((m) => (
+                          <option key={m.id} value={m.id}>{m.glyph} {m.label}</option>
+                        ))}
+                      </select>
+                    )}
+                    <span className="text-[10px] text-[var(--color-ink-faint)]">
+                      {draft.modality === "mixed" ? "each interval set below (HYROX / CrossFit style)" : "the whole workout is this one sport"}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="space-y-2">
@@ -212,6 +262,7 @@ export function WorkoutBuilder({
                       iv={iv}
                       idx={idx}
                       count={draft.intervals.length}
+                      mixed={draft.modality === "mixed"}
                       onChange={(fn) => patch(iv.id, fn)}
                       onMove={(dir) => move(idx, dir)}
                       onDup={() => dup(idx)}
@@ -249,6 +300,7 @@ function emptyPlan(): WorkoutPlan {
     source: "manual",
     createdAt: Math.round(performance.timeOrigin + performance.now()),
     intervals: [newInterval({ name: "Warm-up", kind: "warmup", durationSec: 300, target: { type: "zone", zone: 2 } })],
+    modality: "run",
   };
 }
 
@@ -265,6 +317,7 @@ function IntervalRow({
   iv,
   idx,
   count,
+  mixed,
   onChange,
   onMove,
   onDup,
@@ -273,6 +326,7 @@ function IntervalRow({
   iv: WorkoutInterval;
   idx: number;
   count: number;
+  mixed: boolean;
   onChange: (fn: (iv: WorkoutInterval) => WorkoutInterval) => void;
   onMove: (dir: -1 | 1) => void;
   onDup: () => void;
@@ -303,6 +357,16 @@ function IntervalRow({
         </div>
       </div>
       <div className="flex items-center gap-2 mt-2 pl-7">
+        {mixed && (
+          <select
+            value={iv.modality ?? guessModality(iv.name)}
+            onChange={(e) => onChange((x) => ({ ...x, modality: e.target.value as Modality }))}
+            className="inp w-[120px] h-8"
+            title="Movement for this interval"
+          >
+            {SINGLE_MODALITIES.map((m) => <option key={m.id} value={m.id}>{m.glyph} {m.short}</option>)}
+          </select>
+        )}
         <select value={iv.target.type} onChange={(e) => onChange((x) => ({ ...x, target: { ...x.target, type: e.target.value as TargetType } }))} className="inp w-[110px] h-8">
           {TARGET_TYPES.map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}
         </select>

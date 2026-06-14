@@ -12,6 +12,7 @@
  */
 
 import type { SeriesPoint, SessionSummary } from "../types";
+import { modalityDef } from "./modality";
 
 const FIT_EPOCH_OFFSET = 631065600; // unixSec - this = fit timestamp
 
@@ -216,15 +217,18 @@ export function encodeFitActivity(summary: SessionSummary, series: SeriesPoint[]
   }
   const numLaps = Math.max(1, segs.length);
 
-  // session — sport 10 (training) for guided/hyrox, 0 (generic) for free
+  // session — sport / sub_sport from the session modality classification
+  // (run/row/bike/… → the proper Garmin sport; mixed HYROX/CrossFit → training).
   writeDef(body, 4, 18, SESSION);
-  const sport = summary.mode === "free" ? 0 : 10;
+  const md = modalityDef(summary.modality ?? (summary.mode === "free" ? "other" : "mixed"));
+  const sport = md.fitSport;
+  const subSport = md.fitSub;
   writeData(body, 4, SESSION, [
     0,
     endFit,
     startFit,
     sport,
-    0,
+    subSport,
     elapsedMs,
     elapsedMs,
     summary.distanceM * 100,

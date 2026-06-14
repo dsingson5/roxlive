@@ -232,6 +232,8 @@ export interface WorkoutInterval {
   durationSec: number;
   target: IntervalTarget;
   notes?: string;
+  /** movement type for this interval (used when the plan is "mixed") */
+  modality?: import("./lib/modality").Modality;
 }
 
 export interface WorkoutPlan {
@@ -240,6 +242,8 @@ export interface WorkoutPlan {
   source: "photo" | "manual" | "sample";
   createdAt: number;
   intervals: WorkoutInterval[];
+  /** session classification: a single sport, or "mixed" (per-interval) */
+  modality?: import("./lib/modality").Modality;
 }
 
 /** Raw structured output the vision model returns (before id assignment). */
@@ -309,6 +313,8 @@ export interface SessionSummary {
   endedAt: number;
   durationSec: number;
   mode: "free" | "hyrox" | "workout";
+  /** session modality classification (single sport, or "mixed") */
+  modality?: import("./lib/modality").Modality;
   /** post-workout perceived exertion */
   rpe?: RpeLog;
   /** workout-mode only: overall % of time spent inside target HR bands */

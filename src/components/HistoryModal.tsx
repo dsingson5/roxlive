@@ -1,5 +1,7 @@
+import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { SessionSummary } from "../types";
+import { modalityDef, type Modality } from "../lib/modality";
 import { Sparkline } from "./Charts";
 import { ZONE_DEFS } from "../lib/zones";
 import { fmtClock, fmtDist, fmtNum } from "../lib/format";
@@ -30,6 +32,17 @@ export function HistoryModal({
   onDelete: (id: string) => void;
   onClear: () => void;
 }) {
+  const [filter, setFilter] = useState<Modality | "all">("all");
+
+  // Modalities actually present in saved sessions (for the filter chips).
+  const present = useMemo(() => {
+    const seen = new Set<Modality>();
+    for (const s of sessions) if (s.modality) seen.add(s.modality);
+    return Array.from(seen);
+  }, [sessions]);
+
+  const shown = filter === "all" ? sessions : sessions.filter((s) => s.modality === filter);
+
   return (
     <AnimatePresence>
       {open && (
@@ -46,20 +59,39 @@ export function HistoryModal({
               <h2 className="font-[var(--font-display)] text-xl font-bold">Workout History</h2>
               <button onClick={onClose} className="btn-ghost w-8 h-8 grid place-items-center text-lg">×</button>
             </div>
-            <p className="text-[12px] text-[var(--color-ink-faint)] mb-5">
+            <p className="text-[12px] text-[var(--color-ink-faint)] mb-4">
               {sessions.length === 0
                 ? "No sessions yet — finished workouts will appear here."
                 : `${sessions.length} saved session${sessions.length === 1 ? "" : "s"} · stored on this device`}
             </p>
+
+            {present.length > 1 && (
+              <div className="flex flex-wrap gap-1.5 mb-4">
+                <FilterChip label="All" count={sessions.length} active={filter === "all"} onClick={() => setFilter("all")} />
+                {present.map((m) => (
+                  <FilterChip
+                    key={m}
+                    label={`${modalityDef(m).glyph} ${modalityDef(m).short}`}
+                    count={sessions.filter((s) => s.modality === m).length}
+                    active={filter === m}
+                    onClick={() => setFilter(m)}
+                  />
+                ))}
+              </div>
+            )}
 
             {sessions.length === 0 ? (
               <div className="card p-8 text-center text-[var(--color-ink-faint)]">
                 <div className="text-3xl mb-2">🗓️</div>
                 <div className="text-sm">Hit Stop after a session to save it here.</div>
               </div>
+            ) : shown.length === 0 ? (
+              <div className="card p-8 text-center text-[var(--color-ink-faint)]">
+                <div className="text-sm">No {filter !== "all" ? modalityDef(filter).label.toLowerCase() : ""} sessions.</div>
+              </div>
             ) : (
               <div className="space-y-2.5">
-                {sessions.map((s) => (
+                {shown.map((s) => (
                   <HistoryRow key={s.id} s={s} onOpen={() => onOpen(s)} onDelete={() => onDelete(s.id)} />
                 ))}
               </div>
@@ -81,6 +113,21 @@ export function HistoryModal({
   );
 }
 
+function FilterChip({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-2 h-7 rounded-full text-[11px] border transition-colors ${
+        active
+          ? "bg-[var(--color-volt)] text-black border-transparent font-semibold"
+          : "bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border-[var(--color-line)] hover:text-[var(--color-ink)]"
+      }`}
+    >
+      {label} <span className={active ? "opacity-70" : "text-[var(--color-ink-faint)]"}>{count}</span>
+    </button>
+  );
+}
+
 function HistoryRow({ s, onOpen, onDelete }: { s: SessionSummary; onOpen: () => void; onDelete: () => void }) {
   const date = new Date(s.startedAt);
   const dateStr = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -95,6 +142,11 @@ function HistoryRow({ s, onOpen, onDelete }: { s: SessionSummary; onOpen: () => 
             <span className="px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wide" style={{ color: MODE_COLOR[s.mode], background: "rgba(255,255,255,0.05)" }}>
               {MODE_LABEL[s.mode]}
             </span>
+            {s.modality && (
+              <span className="text-[10px] text-[var(--color-ink-faint)]" title={modalityDef(s.modality).label}>
+                {modalityDef(s.modality).glyph} {modalityDef(s.modality).short}
+              </span>
+            )}
             <span className="text-[12px] text-[var(--color-ink)] font-semibold truncate">
               {s.mode === "workout" ? s.planTitle ?? "Guided workout" : MODE_LABEL[s.mode] + " session"}
             </span>

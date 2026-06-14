@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import type { AthleteProfile, WorkoutPlan } from "../types";
 import type { RunnerState } from "../hooks/useWorkoutRunner";
 import { KIND_COLOR, planDurationSec, targetLabel } from "../lib/workout";
+import { modalityDef } from "../lib/modality";
 import { fmtClock } from "../lib/format";
 
 export function WorkoutRail({
@@ -14,10 +15,14 @@ export function WorkoutRail({
   profile: AthleteProfile;
 }) {
   const total = planDurationSec(plan);
+  const mixed = plan.modality === "mixed";
   return (
     <div className="card p-4">
       <div className="flex items-center justify-between mb-3">
-        <div className="card-title">{plan.title} · {plan.intervals.length} intervals</div>
+        <div className="card-title flex items-center gap-1.5">
+          {plan.modality && <span title={modalityDef(plan.modality).label}>{modalityDef(plan.modality).glyph}</span>}
+          {plan.title} · {plan.intervals.length} intervals
+        </div>
         <div className="text-[10px] mono text-[var(--color-ink-faint)]">{fmtClock(total)} total</div>
       </div>
       <div className="flex gap-1.5 overflow-x-auto pb-2 -mx-1 px-1">
@@ -45,6 +50,9 @@ export function WorkoutRail({
               )}
               <div className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+                {mixed && iv.modality && (
+                  <span className="text-[11px] shrink-0" title={modalityDef(iv.modality).label}>{modalityDef(iv.modality).glyph}</span>
+                )}
                 <span className="num text-[11px] truncate" style={{ color: "var(--color-ink)" }}>{iv.name}</span>
               </div>
               <div className="mono text-[9px] text-[var(--color-ink-faint)] mt-0.5">{fmtClock(iv.durationSec)} · {targetLabel(iv.target, profile)}</div>

@@ -16,6 +16,7 @@ import type {
   VoiceSettings,
 } from "./types";
 import { DEFAULT_VOICE } from "./types";
+import { SINGLE_MODALITIES, type Modality } from "./lib/modality";
 import { buildRace } from "./data/hyrox";
 import { selfTestDFA } from "./lib/dfa";
 import { cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan } from "./lib/workout";
@@ -98,6 +99,11 @@ export default function App() {
 
   // Workout-mode state (persisted locally).
   const [plan, setPlan] = useState<WorkoutPlan | null>(() => loadPlan());
+  const [freeModality, setFreeModality] = useState<Modality>(() => {
+    const stored = localStorage.getItem("roxlive.freeModality");
+    // only accept a real single-sport id (never "mixed" or garbage)
+    return SINGLE_MODALITIES.some((m) => m.id === stored) ? (stored as Modality) : "run";
+  });
   const [voice, setVoice] = useState<VoiceSettings>(() => loadVoice());
   const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem("roxlive.apiKey") ?? "");
   const [visionModel, setVisionModel] = useState<string>(() => localStorage.getItem("roxlive.model") ?? VISION_MODELS[0].id);
@@ -187,6 +193,14 @@ export default function App() {
     setVisionModel(m);
     try {
       localStorage.setItem("roxlive.model", m);
+    } catch {
+      /* ignore */
+    }
+  };
+  const persistFreeModality = (m: Modality) => {
+    setFreeModality(m);
+    try {
+      localStorage.setItem("roxlive.freeModality", m);
     } catch {
       /* ignore */
     }
@@ -411,11 +425,22 @@ export default function App() {
       raceMode === "workout" && plan && workoutAnchor != null
         ? workoutSegmentRecords(plan, workoutAnchor, voice.leadInSec, runner.state.perInterval, snap.t)
         : [];
-    const s = buildSummary(snap, series, raceMode, segments, currentIndex, records, {
-      adherencePct: runner.state.adherencePct,
-      planTitle: plan?.title,
-      segments: workoutSegs,
-    });
+    const sessionModality: Modality =
+      raceMode === "hyrox" ? "mixed" : raceMode === "workout" ? plan?.modality ?? "mixed" : freeModality;
+    const s = buildSummary(
+      snap,
+      series,
+      raceMode,
+      segments,
+      currentIndex,
+      records,
+      {
+        adherencePct: runner.state.adherencePct,
+        planTitle: plan?.title,
+        segments: workoutSegs,
+      },
+      sessionModality
+    );
     fullSeriesRef.current = [...series];
     eng.stop();
     clearAnchor();
@@ -426,6 +451,51 @@ export default function App() {
     }
     setSummary(s);
   };
+
+  // Start/Pause/Stop controls ON the floating PiP window via the Media Session
+  // API — these render as the play/pause/stop buttons on the PiP overlay
+  // (desktop + mobile) and drive the workout, not the video stream.
+  useEffect(() => {
+    if (!pip.active || typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    const frame = buildPipFrame();
+    try {
+      ms.metadata = new MediaMetadata({
+        title: frame.title || "RoxLive",
+        artist: [frame.line1, frame.line2].filter(Boolean).join(" · ") || "RoxLive",
+      });
+    } catch {
+      /* MediaMetadata unsupported */
+    }
+    try {
+      ms.playbackState = paused ? "paused" : "playing";
+    } catch {
+      /* ignore */
+    }
+    const canStart = raceMode === "workout" && eng.mode !== "idle" && workoutAnchor == null && !!plan;
+    const set = (action: MediaSessionAction, fn: (() => void) | null) => {
+      try {
+        ms.setActionHandler(action, fn);
+      } catch {
+        /* action unsupported on this browser */
+      }
+    };
+    set("play", () => {
+      if (paused) togglePause();
+      else if (canStart) handleStartWorkout();
+    });
+    set("pause", () => {
+      if (raceMode === "workout" && workoutAnchor != null && !paused) togglePause();
+    });
+    set("stop", () => {
+      if (raceMode === "squad") squad.stopAll();
+      else if (eng.mode !== "idle") handleStop();
+    });
+    return () => {
+      (["play", "pause", "stop"] as MediaSessionAction[]).forEach((a) => set(a, null));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pip.active, paused, raceMode, eng.mode, workoutAnchor, plan]);
 
   return (
     <div className="min-h-screen">
@@ -492,6 +562,11 @@ export default function App() {
         <>
         {eng.mode === "idle" && !summary && raceMode !== "workout" && (
           <WelcomeBanner onDemo={handleDemo} onConnect={handleConnect} supported={eng.supported} />
+        )}
+
+        {/* Analyzer: classify the session before starting (single sport) */}
+        {raceMode === "free" && eng.mode === "idle" && !summary && (
+          <FreeModalityPicker value={freeModality} onChange={persistFreeModality} />
         )}
 
         {/* Hero row */}
@@ -673,6 +748,43 @@ function WelcomeBanner({ onDemo, onConnect, supported }: { onDemo: () => void; o
   );
 }
 
+function FreeModalityPicker({ value, onChange }: { value: Modality; onChange: (m: Modality) => void }) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card p-4">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+        <div>
+          <div className="text-[11px] mono text-[var(--color-ink-faint)] tracking-wide">CLASSIFY THIS SESSION</div>
+          <div className="text-[13px] text-[var(--color-ink-dim)] mt-0.5">
+            Pick the sport so it's tagged for history, comparison &amp; export.
+          </div>
+        </div>
+        <div className="text-xs text-[var(--color-ink-faint)]">
+          Mixed sessions (HYROX / CrossFit) → use <span className="text-[var(--color-volt)]">Workout</span> mode.
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {SINGLE_MODALITIES.map((m) => {
+          const active = value === m.id;
+          return (
+            <button
+              key={m.id}
+              onClick={() => onChange(m.id)}
+              className={`px-3 h-9 rounded-lg text-sm border transition-colors ${
+                active
+                  ? "bg-[var(--color-volt)] text-black border-transparent font-semibold"
+                  : "bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border-[var(--color-line)] hover:text-[var(--color-ink)]"
+              }`}
+            >
+              <span className="mr-1">{m.glyph}</span>
+              {m.short}
+            </button>
+          );
+        })}
+      </div>
+    </motion.div>
+  );
+}
+
 function WorkoutEmpty({ onBuild }: { onBuild: () => void }) {
   return (
     <div className="card p-6 h-full grid place-items-center text-center relative overflow-hidden">
@@ -760,7 +872,8 @@ function buildSummary(
   segments: PlannedSegment[],
   currentIndex: number,
   records: Record<number, SegmentRecord>,
-  workout: { adherencePct: number | null; planTitle?: string; segments: SegmentRecord[] }
+  workout: { adherencePct: number | null; planTitle?: string; segments: SegmentRecord[] },
+  modality: Modality
 ): SessionSummary {
   const alphas = series.map((p) => p.alpha1).filter((v): v is number => v != null);
   const brs = series.map((p) => p.brpm).filter((v): v is number => v != null);
@@ -781,6 +894,7 @@ function buildSummary(
     endedAt: snap.t,
     durationSec: snap.elapsedSec,
     mode: raceMode,
+    modality,
     adherencePct: raceMode === "workout" ? workout.adherencePct : null,
     planTitle: raceMode === "workout" ? workout.planTitle : undefined,
     avgHr: snap.hrAvg,
