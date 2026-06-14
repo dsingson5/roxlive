@@ -12,12 +12,29 @@ pushes after every change.
 
 ---
 
-## 1. Prerequisites
+## Easiest: one command
 
-- A free [Cloudflare](https://dash.cloudflare.com/sign-up) account.
-- [Node.js](https://nodejs.org) + the Wrangler CLI: `npm i -g wrangler`, then `wrangler login`.
+You need a free [Cloudflare](https://dash.cloudflare.com/sign-up) account and
+[Node.js](https://nodejs.org) (already required to build RoxLive). From the repo
+root:
 
-## 2. Create the KV store
+```bash
+node sync/deploy.mjs
+```
+
+It logs you in (opens a browser the first time — click **Allow**), creates the KV
+namespace, generates + sets the `SYNC_KEY` secret, deploys the Worker, and prints
+your **Sync URL + key**. Re-running is safe. Then skip to step 5.
+
+---
+
+## Manual steps (if you'd rather do it by hand)
+
+### 1. Prerequisites
+
+- A free Cloudflare account + Node.js with Wrangler (`npm i -g wrangler`, then `wrangler login`).
+
+### 2. Create the KV store
 
 ```bash
 cd sync
@@ -26,24 +43,17 @@ wrangler kv namespace create HISTORY
 
 Copy the printed `id` into `sync/wrangler.toml` (replace `REPLACE_WITH_KV_ID`).
 
-## 3. Set the shared sync key (a secret)
+### 3. Set the shared sync key (a secret)
 
-Pick a long random string — this is the password the crew's browsers use to talk
-to your Worker. Generate one any way you like, e.g.:
+Pick a long random string — the password the crew's browsers use to talk to your
+Worker:
 
 ```bash
-# any random string works; here's one way
 node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
+wrangler secret put SYNC_KEY    # paste the random string when prompted
 ```
 
-Then store it as a Worker secret:
-
-```bash
-wrangler secret put SYNC_KEY
-# paste the random string when prompted
-```
-
-## 4. Deploy
+### 4. Deploy
 
 ```bash
 wrangler deploy

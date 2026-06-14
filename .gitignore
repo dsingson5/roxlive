@@ -3,3 +3,5 @@ dist/
 tmp/
 *.local
 .DS_Store
+.wrangler/
+sync/.sync-key.txt
