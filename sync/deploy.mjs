@@ -5,15 +5,13 @@
  *     node sync/deploy.mjs
  *
  * It will (using the wrangler CLI):
- *   1. log you in (opens a browser the first time — authorize there),
+ *   1. log you in if needed (opens a browser — authorize there),
  *   2. create the KV namespace (or reuse it) and write its id into sync/wrangler.toml,
  *   3. generate + set the SYNC_KEY secret (saved locally to sync/.sync-key.txt),
  *   4. deploy the Worker,
  *   5. print the Sync URL + key to paste into RoxLive → Settings → Cross-device sync.
  *
  * Re-running is safe: it reuses the existing namespace and key.
- * Nothing here is committed for you — after it succeeds you can commit the filled-in
- * sync/wrangler.toml (the KV id is not secret) so the config is saved.
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
@@ -25,105 +23,93 @@ import { dirname, join } from "node:path";
 const SYNC_DIR = dirname(fileURLToPath(import.meta.url));
 const TOML = join(SYNC_DIR, "wrangler.toml");
 const KEY_FILE = join(SYNC_DIR, ".sync-key.txt");
-const isWin = process.platform === "win32";
+// Use the .cmd shim on Windows and run WITHOUT a shell — passing shell:true here
+// is what triggered the libuv "UV_HANDLE_CLOSING" assertion crash.
+const NPX = process.platform === "win32" ? "npx.cmd" : "npx";
 
-function wrangler(args, { capture = true } = {}) {
-  // npx resolves wrangler without a global install; shell needed for npx on Windows.
-  return execFileSync("npx", ["--yes", "wrangler", ...args], {
+/** Run wrangler, capturing stdout. Throws on non-zero exit (e.g. not logged in). */
+function cap(args) {
+  return execFileSync(NPX, ["--yes", "wrangler", ...args], {
     cwd: SYNC_DIR,
     encoding: "utf8",
-    stdio: capture ? ["inherit", "pipe", "inherit"] : "inherit",
-    shell: isWin,
+    stdio: ["inherit", "pipe", "inherit"],
   });
 }
-
-function step(msg) {
-  console.log(`\n→ ${msg}`);
+/** Run wrangler attached to your terminal (needed for the interactive login). */
+function tty(args) {
+  execFileSync(NPX, ["--yes", "wrangler", ...args], { cwd: SYNC_DIR, stdio: "inherit" });
 }
+const step = (m) => console.log(`\n→ ${m}`);
 
-// 1. Auth ---------------------------------------------------------------------
+// 1. Auth + 2. KV namespace ---------------------------------------------------
 step("Checking Cloudflare login…");
-let loggedIn = true;
-try {
-  wrangler(["whoami"]);
-} catch {
-  loggedIn = false;
+function listNamespaces() {
+  return JSON.parse(cap(["kv", "namespace", "list"]));
 }
-if (!loggedIn) {
-  step("Opening browser to log in to Cloudflare — click Allow there…");
-  wrangler(["login"], { capture: false });
+let namespaces;
+try {
+  namespaces = listNamespaces(); // succeeds only when already authenticated
+} catch {
+  step("Logging in to Cloudflare — a browser tab will open, click Allow…");
+  tty(["login"]); // real terminal → interactive OAuth
+  namespaces = listNamespaces();
 }
 
-// 2. KV namespace -------------------------------------------------------------
 step("Ensuring the HISTORY KV namespace exists…");
 let kvId = "";
-const idRe = /id\s*=\s*"([0-9a-fA-F]{32})"|"id"\s*:\s*"([0-9a-fA-F]{32})"/;
-
-try {
-  const out = wrangler(["kv", "namespace", "create", "HISTORY"]);
-  const m = out.match(idRe);
+const existing = namespaces.find((n) => typeof n.title === "string" && n.title.includes("HISTORY"));
+if (existing) {
+  kvId = existing.id;
+} else {
+  const out = cap(["kv", "namespace", "create", "HISTORY"]);
+  const m = out.match(/id\s*=\s*"([0-9a-fA-F]{32})"|"id"\s*:\s*"([0-9a-fA-F]{32})"/);
   kvId = (m && (m[1] || m[2])) || "";
-} catch {
-  /* probably already exists — fall back to the list below */
 }
 if (!kvId) {
-  try {
-    const list = JSON.parse(wrangler(["kv", "namespace", "list"]));
-    const found = list.find((n) => typeof n.title === "string" && n.title.includes("HISTORY"));
-    if (found) kvId = found.id;
-  } catch {
-    /* ignore */
-  }
-}
-if (!kvId) {
-  console.error(
-    "\nCould not determine the KV namespace id automatically.\n" +
-      "Run `npx wrangler kv namespace create HISTORY` in the sync/ folder,\n" +
-      "paste the printed id into sync/wrangler.toml (replace REPLACE_WITH_KV_ID),\n" +
-      "then re-run this script."
-  );
+  console.error("\nCould not determine the KV namespace id. Run the manual steps in sync/README.md.");
   process.exit(1);
 }
 console.log(`  KV namespace id: ${kvId}`);
 
 // 3. Write the id into wrangler.toml -----------------------------------------
 let toml = readFileSync(TOML, "utf8");
-toml = toml.replace(/id\s*=\s*"REPLACE_WITH_KV_ID"/, `id = "${kvId}"`).replace(/id\s*=\s*"[0-9a-fA-F]{32}"/, `id = "${kvId}"`);
+toml = toml
+  .replace(/id\s*=\s*"REPLACE_WITH_KV_ID"/, `id = "${kvId}"`)
+  .replace(/id\s*=\s*"[0-9a-fA-F]{32}"/, `id = "${kvId}"`);
 writeFileSync(TOML, toml);
 
 // 4. SYNC_KEY secret ----------------------------------------------------------
 step("Setting the SYNC_KEY secret…");
-let key = "";
-if (existsSync(KEY_FILE)) key = readFileSync(KEY_FILE, "utf8").trim();
+let key = existsSync(KEY_FILE) ? readFileSync(KEY_FILE, "utf8").trim() : "";
 if (!key) {
   key = randomBytes(24).toString("base64url");
   writeFileSync(KEY_FILE, key);
 }
-const sec = spawnSync("npx", ["--yes", "wrangler", "secret", "put", "SYNC_KEY"], {
+const sec = spawnSync(NPX, ["--yes", "wrangler", "secret", "put", "SYNC_KEY"], {
   cwd: SYNC_DIR,
   input: key + "\n",
   stdio: ["pipe", "inherit", "inherit"],
-  shell: isWin,
 });
 if (sec.status !== 0) {
-  console.error("Failed to set SYNC_KEY secret — see wrangler output above.");
+  console.error("Failed to set SYNC_KEY — see wrangler output above.");
   process.exit(1);
 }
 
 // 5. Deploy -------------------------------------------------------------------
 step("Deploying the Worker…");
-wrangler(["deploy"], { capture: false });
+const deployOut = cap(["deploy"]);
+console.log(deployOut);
+const urlMatch = deployOut.match(/https:\/\/[^\s]+\.workers\.dev/);
 
 // 6. Done ---------------------------------------------------------------------
 console.log("\n========================================================");
 console.log("  Cross-device sync deployed. In RoxLive on EACH device:");
 console.log("  Settings (gear) -> Cross-device sync");
 console.log("");
-console.log("    Sync URL:  https://roxlive-sync.<your-subdomain>.workers.dev");
-console.log("               (use the exact workers.dev URL printed just above)");
+console.log(`    Sync URL:  ${urlMatch ? urlMatch[0] : "https://roxlive-sync.<your-subdomain>.workers.dev"}`);
 console.log(`    Sync key:  ${key}`);
 console.log("");
 console.log("  The key is also saved in sync/.sync-key.txt (git-ignored).");
-console.log("  Optional: commit the filled-in config so it's saved:");
-console.log("    git add sync/wrangler.toml && git commit -m \"sync: KV id\" && git push");
+console.log("  Optional — commit the filled-in config so it's saved:");
+console.log('    git add sync/wrangler.toml && git commit -m "sync: KV id" && git push');
 console.log("========================================================");
