@@ -22,8 +22,9 @@ import { selfTestDFA } from "./lib/dfa";
 import { cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan } from "./lib/workout";
 import { VISION_MODELS } from "./lib/vision";
 import { VoiceCoach } from "./lib/voice";
-import { addToHistory, clearHistory, deleteFromHistory, loadHistory, updateHistory } from "./lib/history";
+import { addToHistory, clearHistory, deleteFromHistory, loadHistory, pullAndMerge, updateHistory } from "./lib/history";
 import { resolveCrewUser, prettyUser } from "./lib/user";
+import { loadSyncConfig, saveSyncConfig, isSyncConfigured, flushPendingPushes, type SyncConfig } from "./lib/sync";
 import * as strava from "./lib/strava";
 import { TopBar } from "./components/TopBar";
 import { HeroHR, DfaGauge } from "./components/HeroPanels";
@@ -64,6 +65,35 @@ export default function App() {
   const [history, setHistory] = useState<SessionSummary[]>(() => loadHistory());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDetail, setHistoryDetail] = useState<SessionSummary | null>(null);
+
+  // Cross-device sync (opt-in): pull the cloud copy, merge with local, push back.
+  const [syncCfg, setSyncCfg] = useState<SyncConfig>(() => loadSyncConfig());
+  const [syncBusy, setSyncBusy] = useState(false);
+  const syncNow = useCallback(async () => {
+    if (!crewUser || !isSyncConfigured()) return;
+    setSyncBusy(true);
+    try {
+      setHistory(await pullAndMerge()); // pull → union+tombstones → persist + push back
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [crewUser]);
+  // Pull on load (once the athlete is known).
+  useEffect(() => {
+    syncNow();
+  }, [syncNow]);
+  // Flush any debounced cloud push before the tab is backgrounded/closed, so a
+  // workout saved seconds earlier still reaches the cloud.
+  useEffect(() => {
+    const flush = () => flushPendingPushes();
+    const onVis = () => { if (document.visibilityState === "hidden") flush(); };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
 
   // Strava
   const [stravaCfg, setStravaCfg] = useState(() => strava.loadConfig());
@@ -515,7 +545,7 @@ export default function App() {
         onDemo={handleDemo}
         onStop={handleStop}
         onSettings={() => setSettingsOpen(true)}
-        onHistory={() => { setHistory(loadHistory()); setHistoryOpen(true); }}
+        onHistory={() => { setHistory(loadHistory()); setHistoryOpen(true); syncNow(); }}
         onPiP={pip.toggle}
         pipActive={pip.active}
         pipSupported={pip.supported}
@@ -677,6 +707,13 @@ export default function App() {
           onSaveConfig: saveStravaCfg,
           onConnect: strava.beginAuthorize,
           onDisconnect: disconnectStrava,
+        }}
+        sync={{
+          config: syncCfg,
+          user: prettyUser(crewUser),
+          busy: syncBusy,
+          onSaveConfig: (c) => { saveSyncConfig(c); setSyncCfg(loadSyncConfig()); },
+          onSyncNow: syncNow,
         }}
         onClose={() => setSettingsOpen(false)}
         onSave={eng.setProfile}

@@ -1,0 +1,20 @@
+# RoxLive history-sync Worker — Cloudflare Wrangler config.
+# Deploy with:  wrangler deploy   (see sync/README.md for the full walkthrough)
+
+name = "roxlive-sync"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# KV namespace that stores each athlete's history. Create it once with:
+#   wrangler kv namespace create HISTORY
+# then paste the printed id below (replace REPLACE_WITH_KV_ID).
+[[kv_namespaces]]
+binding = "HISTORY"
+id = "REPLACE_WITH_KV_ID"
+
+# Optional: lock CORS to your site instead of "*".
+[vars]
+ALLOW_ORIGIN = "https://dsingson5.github.io"
+
+# SYNC_KEY is a SECRET — do NOT put it here. Set it with:
+#   wrangler secret put SYNC_KEY

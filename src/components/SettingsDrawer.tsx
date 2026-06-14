@@ -4,6 +4,7 @@ import type { AthleteProfile } from "../types";
 import { zoneBounds } from "../lib/zones";
 import { VISION_MODELS } from "../lib/vision";
 import type { StravaConfig } from "../lib/strava";
+import type { SyncConfig } from "../lib/sync";
 
 export function SettingsDrawer({
   open,
@@ -13,6 +14,7 @@ export function SettingsDrawer({
   model,
   onModelChange,
   strava,
+  sync,
   onClose,
   onSave,
 }: {
@@ -29,6 +31,13 @@ export function SettingsDrawer({
     onSaveConfig: (c: StravaConfig) => void;
     onConnect: () => void;
     onDisconnect: () => void;
+  };
+  sync: {
+    config: SyncConfig;
+    user: string;
+    busy: boolean;
+    onSaveConfig: (c: SyncConfig) => void;
+    onSyncNow: () => void;
   };
   onClose: () => void;
   onSave: (p: AthleteProfile) => void;
@@ -114,6 +123,9 @@ export function SettingsDrawer({
 
               {/* Strava */}
               <StravaSection strava={strava} />
+
+              {/* Cross-device history sync */}
+              <SyncSection sync={sync} />
 
               {/* zone preview */}
               <div>
@@ -202,6 +214,58 @@ function StravaSection({
             </button>
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+function SyncSection({
+  sync: s,
+}: {
+  sync: {
+    config: SyncConfig;
+    user: string;
+    busy: boolean;
+    onSaveConfig: (c: SyncConfig) => void;
+    onSyncNow: () => void;
+  };
+}) {
+  const [url, setUrl] = useState(s.config.url);
+  const [key, setKey] = useState(s.config.key);
+  const dirty = url !== s.config.url || key !== s.config.key;
+  const configured = !!url.trim() && !!key.trim();
+  const live = !!s.config.url && !!s.config.key;
+
+  return (
+    <div>
+      <div className="card-title mb-2">Cross-device sync</div>
+      <p className="text-[11px] text-[var(--color-ink-faint)] leading-relaxed mb-2">
+        Off by default — history stays on this device. Add a free Cloudflare Worker (see sync/README.md) so your
+        history follows you to any device you sign in on. Same for every crew athlete.
+      </p>
+      <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Sync URL (https://…workers.dev)" className="inp" autoComplete="off" />
+      <input value={key} onChange={(e) => setKey(e.target.value)} type="password" placeholder="Sync key" className="inp mt-2" autoComplete="off" />
+      <div className="flex items-center gap-2 mt-2">
+        <button
+          onClick={() => s.onSaveConfig({ url, key })}
+          disabled={!dirty || !configured}
+          className="btn-ghost h-9 px-4 text-[13px] disabled:opacity-40"
+        >
+          Save
+        </button>
+        <button
+          onClick={s.onSyncNow}
+          disabled={!live || dirty || s.busy}
+          title={dirty ? "Save first" : ""}
+          className="btn-ghost h-9 px-4 text-[13px] disabled:opacity-40"
+        >
+          {s.busy ? "Syncing…" : "Sync now"}
+        </button>
+      </div>
+      {live && !dirty && (
+        <div className="mono text-[10px] text-[var(--color-mint)] mt-1.5">
+          ✓ syncing {s.user ? `${s.user}'s` : "this device's"} history
+        </div>
       )}
     </div>
   );
