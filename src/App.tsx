@@ -33,11 +33,9 @@ import {
   changePassword as syncChangePassword,
   clearSession,
   sessionUser,
-  isAdminUser,
   type SyncConfig,
 } from "./lib/sync";
 import { logActivity, flushActivity } from "./lib/activity";
-import { AdminPanel } from "./components/AdminPanel";
 import * as strava from "./lib/strava";
 import { TopBar } from "./components/TopBar";
 import { HeroHR, DfaGauge } from "./components/HeroPanels";
@@ -78,7 +76,6 @@ export default function App() {
   const [history, setHistory] = useState<SessionSummary[]>(() => loadHistory());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDetail, setHistoryDetail] = useState<SessionSummary | null>(null);
-  const [adminOpen, setAdminOpen] = useState(false);
 
   // Cross-device sync: a signed-in athlete's history follows them to any device.
   // Auth is a real password (server-verified) → a signed session token.
@@ -635,7 +632,6 @@ export default function App() {
         onStop={handleStop}
         onSettings={() => setSettingsOpen(true)}
         onHistory={() => { setHistory(loadHistory()); setHistoryOpen(true); syncNow(); logActivity("history_view"); }}
-        onAdmin={isAdminUser(crewUser) && signedIn ? () => setAdminOpen(true) : undefined}
         onPiP={pip.toggle}
         pipActive={pip.active}
         pipSupported={pip.supported}
@@ -847,9 +843,6 @@ export default function App() {
         onDelete={(id) => setHistory(deleteFromHistory(id))}
         onClear={() => setHistory(clearHistory())}
       />
-
-      {/* Coach-only crew dashboard (david). */}
-      <AdminPanel open={adminOpen} profile={profile} onClose={() => setAdminOpen(false)} />
 
       {/* Huge 3-2-1 countdown for the end of the current interval / segment. */}
       <CountdownOverlay seconds={countdown.seconds} label={countdown.label} />
