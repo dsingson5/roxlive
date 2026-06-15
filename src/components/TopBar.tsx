@@ -8,7 +8,7 @@ export function TopBar({
   device,
   mode,
   raceMode,
-  onRaceModeChange,
+  onSectionChange,
   onConnect,
   onDemo,
   onStop,
@@ -24,7 +24,7 @@ export function TopBar({
   device: DeviceInfo | null;
   mode: SourceMode;
   raceMode: "free" | "hyrox" | "workout" | "squad";
-  onRaceModeChange: (m: "free" | "hyrox" | "workout" | "squad") => void;
+  onSectionChange: (s: "workout" | "squad") => void;
   onConnect: () => void;
   onDemo: () => void;
   onStop: () => void;
@@ -52,12 +52,10 @@ export function TopBar({
           </div>
         </div>
 
-        {/* mode segmented control */}
+        {/* section segmented control */}
         <div className="hidden md:flex items-center bg-white/[0.04] rounded-xl p-0.5 border border-[var(--color-line)]">
-          <ModeBtn active={raceMode === "free"} onClick={() => onRaceModeChange("free")}>Analyzer</ModeBtn>
-          <ModeBtn active={raceMode === "hyrox"} onClick={() => onRaceModeChange("hyrox")}>HYROX</ModeBtn>
-          <ModeBtn active={raceMode === "workout"} onClick={() => onRaceModeChange("workout")}>Workout</ModeBtn>
-          <ModeBtn active={raceMode === "squad"} onClick={() => onRaceModeChange("squad")}>Squad</ModeBtn>
+          <ModeBtn active={raceMode !== "squad"} onClick={() => onSectionChange("workout")}>Workout</ModeBtn>
+          <ModeBtn active={raceMode === "squad"} onClick={() => onSectionChange("squad")}>Squad</ModeBtn>
         </div>
 
         {/* session clock (solo modes only) */}
@@ -119,13 +117,11 @@ export function TopBar({
         </div>
       </div>
 
-      {/* Mode switcher row — phones only (the inline pills above are md+) */}
+      {/* Section switcher row — phones only (the inline pills above are md+) */}
       <div className="md:hidden max-w-[1480px] mx-auto px-4 pb-2.5">
         <div className="flex items-center bg-white/[0.04] rounded-xl p-0.5 border border-[var(--color-line)]">
-          <MobileModeBtn active={raceMode === "free"} onClick={() => onRaceModeChange("free")}>Analyzer</MobileModeBtn>
-          <MobileModeBtn active={raceMode === "hyrox"} onClick={() => onRaceModeChange("hyrox")}>HYROX</MobileModeBtn>
-          <MobileModeBtn active={raceMode === "workout"} onClick={() => onRaceModeChange("workout")}>Workout</MobileModeBtn>
-          <MobileModeBtn active={raceMode === "squad"} onClick={() => onRaceModeChange("squad")}>Squad</MobileModeBtn>
+          <MobileModeBtn active={raceMode !== "squad"} onClick={() => onSectionChange("workout")}>Workout</MobileModeBtn>
+          <MobileModeBtn active={raceMode === "squad"} onClick={() => onSectionChange("squad")}>Squad</MobileModeBtn>
         </div>
       </div>
     </header>

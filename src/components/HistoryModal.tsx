@@ -21,6 +21,7 @@ export function HistoryModal({
   open,
   sessions,
   userLabel,
+  synced,
   onClose,
   onOpen,
   onDelete,
@@ -30,6 +31,8 @@ export function HistoryModal({
   sessions: SessionSummary[];
   /** signed-in Hybrid Crew athlete, e.g. "David" — empty when anonymous */
   userLabel?: string;
+  /** true when signed in + syncing to the cloud */
+  synced?: boolean;
   onClose: () => void;
   onOpen: (s: SessionSummary) => void;
   onDelete: (id: string) => void;
@@ -68,7 +71,7 @@ export function HistoryModal({
               {userLabel && <span className="text-[var(--color-volt)]">✦ {userLabel} · </span>}
               {sessions.length === 0
                 ? "No sessions yet — finished workouts will appear here."
-                : `${sessions.length} saved session${sessions.length === 1 ? "" : "s"} · stored on this device`}
+                : `${sessions.length} saved session${sessions.length === 1 ? "" : "s"} · ${synced ? "synced across your devices" : "stored on this device"}`}
             </p>
 
             {present.length > 1 && (

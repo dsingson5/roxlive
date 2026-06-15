@@ -16,7 +16,7 @@ import type {
   VoiceSettings,
 } from "./types";
 import { DEFAULT_VOICE } from "./types";
-import { SINGLE_MODALITIES, type Modality } from "./lib/modality";
+import { SINGLE_MODALITIES, guessModality, type Modality } from "./lib/modality";
 import { buildRace } from "./data/hyrox";
 import { selfTestDFA } from "./lib/dfa";
 import { cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan } from "./lib/workout";
@@ -66,7 +66,7 @@ export default function App() {
   const eng = useEngine();
   const { snapshot: snap, series, profile } = eng;
 
-  const [raceMode, setRaceMode] = useState<"free" | "hyrox" | "workout" | "squad">("hyrox");
+  const [raceMode, setRaceMode] = useState<"free" | "hyrox" | "workout" | "squad">("free");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [manualFocus, setManualFocus] = useState<number | null>(null);
@@ -244,12 +244,31 @@ export default function App() {
 
   // Multi-athlete squad (its own engines; independent of the solo session).
   const squad = useSquad(voice, profile);
+  // HYROX as an assignable squad plan (the race as timed, classified intervals).
+  const hyroxPlan = useMemo<WorkoutPlan>(
+    () => ({
+      id: "hyrox-race",
+      title: "HYROX Race",
+      source: "sample",
+      createdAt: 0,
+      modality: "mixed",
+      intervals: segments.map((s) => ({
+        id: `hx-${s.index}`,
+        name: s.label,
+        kind: "work" as const,
+        durationSec: s.plannedSec,
+        target: { type: "none" as const },
+        modality: s.kind === "run" ? ("run" as Modality) : guessModality(s.label),
+      })),
+    }),
+    [segments]
+  );
   const squadPlans = useMemo(() => {
-    const list: WorkoutPlan[] = [];
+    const list: WorkoutPlan[] = [hyroxPlan];
     if (plan) list.push(plan);
     for (const s of samplePlans()) list.push(s);
     return list;
-  }, [plan]);
+  }, [plan, hyroxPlan]);
 
   const workoutActive =
     raceMode === "workout" && eng.mode !== "idle" && !!plan && workoutAnchor != null;
@@ -359,7 +378,18 @@ export default function App() {
     setRaceMode(m);
     hyroxFired.current = new Set(); // avoid stale countdown tokens across modes
     if (m !== "workout") clearAnchor();
-    if (m === "workout" && !plan) setBuilderOpen(true);
+  };
+
+  // Top-level section: the workout sub-type (free / plan / hyrox) is chosen inside.
+  const [workoutType, setWorkoutType] = useState<"free" | "workout" | "hyrox">("free");
+  const chooseWorkoutType = (t: "free" | "workout" | "hyrox") => {
+    setWorkoutType(t);
+    handleModeChange(t);
+    if (t === "workout" && !plan) setBuilderOpen(true);
+  };
+  const handleSectionChange = (s: "workout" | "squad") => {
+    if (s === "squad") handleModeChange("squad");
+    else chooseWorkoutType(workoutType);
   };
 
   /** Builder's primary CTA: adopt the plan and arm it — never auto-start. */
@@ -598,7 +628,7 @@ export default function App() {
         device={eng.device}
         mode={eng.mode}
         raceMode={raceMode}
-        onRaceModeChange={handleModeChange}
+        onSectionChange={handleSectionChange}
         onConnect={handleConnect}
         onDemo={handleDemo}
         onStop={handleStop}
@@ -611,7 +641,7 @@ export default function App() {
         supported={eng.supported}
       />
 
-      <main className="max-w-[1480px] mx-auto px-4 sm:px-6 py-5 space-y-4">
+      <main className="max-w-[1480px] mx-auto px-4 sm:px-6 py-3 space-y-3">
         {notice && (
           <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="card px-4 py-3 text-sm flex items-center gap-3" style={{ borderColor: "rgba(252,76,2,0.4)" }}>
             <span className="text-[#fc4c02]">●</span>
@@ -657,82 +687,76 @@ export default function App() {
             }}
           />
         ) : (
-        <>
-        {eng.mode === "idle" && !summary && raceMode !== "workout" && (
-          <WelcomeBanner onDemo={handleDemo} onConnect={handleConnect} supported={eng.supported} />
-        )}
-
-        {/* Analyzer: classify the session before starting (single sport) */}
-        {raceMode === "free" && eng.mode === "idle" && !summary && (
-          <FreeModalityPicker value={freeModality} onChange={persistFreeModality} />
-        )}
-
-        {/* Hero row */}
-        <motion.div layout className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-          <div className="lg:col-span-3"><HeroHR snap={snap} profile={profile} /></div>
-          <div className="lg:col-span-3"><DfaGauge snap={snap} /></div>
-          <div className="lg:col-span-6">
-            {raceMode === "hyrox" ? (
-              <div className="flex flex-col gap-4 h-full">
-                {focusSeg && <StationGuide seg={focusSeg} profile={profile} isCurrent={isFocusCurrent && eng.mode !== "idle"} />}
-              </div>
-            ) : raceMode === "workout" ? (
-              plan ? (
-                <GuidedRun
-                  state={runner.state}
-                  plan={plan}
-                  profile={profile}
-                  hr={snap.hr}
-                  sourceLive={eng.mode !== "idle"}
-                  simulated={eng.mode === "demo"}
-                  paused={paused}
-                  onStart={handleStartWorkout}
-                  onPause={togglePause}
-                  onConnect={handleConnect}
-                  onSimulate={handleDemo}
-                  onEdit={() => setBuilderOpen(true)}
-                />
-              ) : (
-                <WorkoutEmpty onBuild={() => setBuilderOpen(true)} />
-              )
-            ) : (
-              <InsightPanel snap={snap} />
+        eng.mode === "idle" && !summary ? (
+          /* ---- Setup (compact — fits one screen) ---- */
+          <>
+            <SessionSetup
+              raceMode={raceMode}
+              onType={chooseWorkoutType}
+              plan={plan}
+              onBuild={() => setBuilderOpen(true)}
+              freeModality={freeModality}
+              onFreeModality={persistFreeModality}
+            />
+            {raceMode === "workout" && plan && <WorkoutRail plan={plan} state={runner.state} profile={profile} />}
+            {raceMode === "hyrox" && (
+              <RaceRail segments={segments} currentIndex={currentIndex} focusIndex={focusIndex} records={records} profile={profile} onFocus={setManualFocus} />
             )}
-          </div>
-        </motion.div>
+          </>
+        ) : (
+          /* ---- Live dashboard ---- */
+          <>
+            <motion.div layout className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+              <div className="lg:col-span-3"><HeroHR snap={snap} profile={profile} /></div>
+              <div className="lg:col-span-3"><DfaGauge snap={snap} /></div>
+              <div className="lg:col-span-6">
+                {raceMode === "hyrox" ? (
+                  <div className="flex flex-col gap-3 h-full">
+                    {focusSeg && <StationGuide seg={focusSeg} profile={profile} isCurrent={isFocusCurrent && eng.mode !== "idle"} />}
+                  </div>
+                ) : raceMode === "workout" ? (
+                  plan ? (
+                    <GuidedRun
+                      state={runner.state}
+                      plan={plan}
+                      profile={profile}
+                      hr={snap.hr}
+                      sourceLive={eng.mode !== "idle"}
+                      simulated={eng.mode === "demo"}
+                      paused={paused}
+                      onStart={handleStartWorkout}
+                      onPause={togglePause}
+                      onConnect={handleConnect}
+                      onSimulate={handleDemo}
+                      onEdit={() => setBuilderOpen(true)}
+                    />
+                  ) : (
+                    <WorkoutEmpty onBuild={() => setBuilderOpen(true)} />
+                  )
+                ) : (
+                  <InsightPanel snap={snap} />
+                )}
+              </div>
+            </motion.div>
 
-        {/* Live telemetry chart */}
-        <LiveChart series={series} bounds={snap.zoneBounds} maxHr={profile.maxHr} />
+            <LiveChart series={series} bounds={snap.zoneBounds} maxHr={profile.maxHr} />
 
-        {/* Metric cards */}
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
-          <DecouplingCard snap={snap} />
-          <HrvCard snap={snap} series={series} />
-          <BreathingCard snap={snap} />
-          <PaceCard snap={snap} />
-          <IntervalCard snap={snap} />
-        </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+              <DecouplingCard snap={snap} />
+              <HrvCard snap={snap} series={series} />
+              <BreathingCard snap={snap} />
+              <PaceCard snap={snap} />
+              <IntervalCard snap={snap} />
+            </div>
 
-        {/* HYROX race rail */}
-        {raceMode === "hyrox" && (
-          <RaceRail
-            segments={segments}
-            currentIndex={currentIndex}
-            focusIndex={focusIndex}
-            records={records}
-            profile={profile}
-            onFocus={setManualFocus}
-          />
-        )}
+            {raceMode === "hyrox" && (
+              <RaceRail segments={segments} currentIndex={currentIndex} focusIndex={focusIndex} records={records} profile={profile} onFocus={setManualFocus} />
+            )}
+            {raceMode === "workout" && plan && <WorkoutRail plan={plan} state={runner.state} profile={profile} />}
 
-        {/* Workout interval rail */}
-        {raceMode === "workout" && plan && (
-          <WorkoutRail plan={plan} state={runner.state} profile={profile} />
-        )}
-
-        {/* Zone distribution */}
-        <ZoneBars snap={snap} />
-        </>
+            <ZoneBars snap={snap} />
+          </>
+        )
         )}
 
         <Footer />
@@ -816,6 +840,7 @@ export default function App() {
         open={historyOpen}
         sessions={history}
         userLabel={prettyUser(crewUser)}
+        synced={signedIn}
         onClose={() => setHistoryOpen(false)}
         onOpen={(s) => setHistoryDetail(s)}
         onDelete={(id) => setHistory(deleteFromHistory(id))}
@@ -833,69 +858,87 @@ export default function App() {
 
 /* ------------------------------------------------------------------ */
 
-function WelcomeBanner({ onDemo, onConnect, supported }: { onDemo: () => void; onConnect: () => void; supported: boolean }) {
+/** Idle setup card: choose the workout type (Free / Plan / HYROX) and classify
+ *  before starting. Start buttons live in the TopBar (Connect / Simulate). */
+function SessionSetup({
+  raceMode,
+  onType,
+  plan,
+  onBuild,
+  freeModality,
+  onFreeModality,
+}: {
+  raceMode: "free" | "hyrox" | "workout" | "squad";
+  onType: (t: "free" | "workout" | "hyrox") => void;
+  plan: WorkoutPlan | null;
+  onBuild: () => void;
+  freeModality: Modality;
+  onFreeModality: (m: Modality) => void;
+}) {
+  const types = [
+    { id: "free", label: "Free" },
+    { id: "workout", label: "Plan" },
+    { id: "hyrox", label: "HYROX" },
+  ] as const;
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="card p-6 sm:p-8 relative overflow-hidden">
-      <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ background: "radial-gradient(600px 300px at 100% 0%, rgba(216,255,58,0.25), transparent 60%)" }} />
-      <div className="relative max-w-2xl">
-        <div className="inline-flex items-center gap-2 text-[11px] mono text-[var(--color-volt)] mb-3">
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-volt)]" /> REAL-TIME MULTI-SENSOR ANALYZER
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card p-3 sm:p-4">
+      <div className="flex items-center gap-3 flex-wrap mb-3">
+        <div className="flex bg-white/[0.04] rounded-xl p-0.5 border border-[var(--color-line)]">
+          {types.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => onType(t.id)}
+              className="px-4 h-8 rounded-lg text-[13px] font-semibold transition-colors"
+              style={{ background: raceMode === t.id ? "var(--color-volt)" : "transparent", color: raceMode === t.id ? "#0b0c06" : "var(--color-ink-dim)" }}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
-        <h1 className="font-[var(--font-display)] text-3xl sm:text-4xl font-bold leading-tight">
-          Read your engine in real time.
-        </h1>
-        <p className="text-[var(--color-ink-dim)] mt-3 leading-relaxed">
-          RoxLive turns a Bluetooth heart-rate strap into a sports-science lab — live <span className="text-[var(--color-cyan)]">DFA-α1</span> thresholds,
-          aerobic decoupling, RSA breathing rate, HR-zone segmentation and a full HYROX race guide. Pair a Polar H10 / Garmin
-          HRM-Pro for real metrics, or <span className="text-[var(--color-volt)]">simulate</span> to explore it with no hardware.
-        </p>
-        <div className="flex flex-wrap gap-3 mt-5">
-          <button onClick={onConnect} className="btn-volt px-6 h-11 text-sm">Connect HR Sensor</button>
-          <button onClick={onDemo} className="btn-ghost px-6 h-11 text-sm">▶ Simulate</button>
+        <div className="text-[11px] text-[var(--color-ink-faint)]">
+          {raceMode === "free" ? "Just track — pick a sport below, then Connect / Simulate."
+            : raceMode === "workout" ? "Run a built or imported plan."
+            : "Full HYROX race — 8 runs + 8 stations with coaching."}
         </div>
-        {!supported && (
-          <p className="text-[11px] text-[var(--color-ink-faint)] mt-3">
-            Live pairing needs Web Bluetooth (Chrome / Edge on desktop or Android). The simulator works everywhere.
-          </p>
-        )}
       </div>
-    </motion.div>
-  );
-}
 
-function FreeModalityPicker({ value, onChange }: { value: Modality; onChange: (m: Modality) => void }) {
-  return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card p-4">
-      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+      {raceMode === "free" && (
         <div>
-          <div className="text-[11px] mono text-[var(--color-ink-faint)] tracking-wide">CLASSIFY THIS SESSION</div>
-          <div className="text-[13px] text-[var(--color-ink-dim)] mt-0.5">
-            Pick the sport so it's tagged for history, comparison &amp; export.
+          <div className="text-[10px] mono text-[var(--color-ink-faint)] tracking-[0.12em] uppercase mb-2">Classify this session</div>
+          <div className="flex flex-wrap gap-2">
+            {SINGLE_MODALITIES.map((m) => {
+              const active = freeModality === m.id;
+              return (
+                <button
+                  key={m.id}
+                  onClick={() => onFreeModality(m.id)}
+                  className={`px-3 h-9 rounded-lg text-sm border transition-colors ${
+                    active
+                      ? "bg-[var(--color-volt)] text-black border-transparent font-semibold"
+                      : "bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border-[var(--color-line)] hover:text-[var(--color-ink)]"
+                  }`}
+                >
+                  <span className="mr-1">{m.glyph}</span>
+                  {m.short}
+                </button>
+              );
+            })}
           </div>
         </div>
-        <div className="text-xs text-[var(--color-ink-faint)]">
-          Mixed sessions (HYROX / CrossFit) → use <span className="text-[var(--color-volt)]">Workout</span> mode.
+      )}
+
+      {raceMode === "workout" && (
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="text-[13px] text-[var(--color-ink-dim)]">
+            {plan ? (
+              <>Plan: <span className="text-[var(--color-ink)] font-semibold">{plan.title}</span> · {plan.intervals.length} intervals</>
+            ) : (
+              "No plan loaded yet."
+            )}
+          </div>
+          <button onClick={onBuild} className="btn-ghost h-9 px-4 text-[13px]">{plan ? "Edit / swap" : "Build / import workout"}</button>
         </div>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {SINGLE_MODALITIES.map((m) => {
-          const active = value === m.id;
-          return (
-            <button
-              key={m.id}
-              onClick={() => onChange(m.id)}
-              className={`px-3 h-9 rounded-lg text-sm border transition-colors ${
-                active
-                  ? "bg-[var(--color-volt)] text-black border-transparent font-semibold"
-                  : "bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border-[var(--color-line)] hover:text-[var(--color-ink)]"
-              }`}
-            >
-              <span className="mr-1">{m.glyph}</span>
-              {m.short}
-            </button>
-          );
-        })}
-      </div>
+      )}
     </motion.div>
   );
 }
@@ -918,10 +961,9 @@ function WorkoutEmpty({ onBuild }: { onBuild: () => void }) {
 
 function Footer() {
   return (
-    <footer className="pt-2 pb-8 text-center">
-      <p className="text-[11px] text-[var(--color-ink-faint)] leading-relaxed max-w-2xl mx-auto">
-        Built on the Web Bluetooth Heart Rate Service (0x180D). DFA-α1 thresholds (0.75 ≈ LT1, 0.50 ≈ LT2) are population
-        defaults — validate against your own lactate/ramp test. Not a medical device.
+    <footer className="pt-1 pb-3 text-center">
+      <p className="text-[10px] text-[var(--color-ink-faint)] max-w-2xl mx-auto">
+        DFA-α1 thresholds (0.75 ≈ LT1, 0.50 ≈ LT2) are population defaults — not a medical device.
       </p>
     </footer>
   );
