@@ -62,6 +62,35 @@ wrangler deploy
 - **Endpoints:** `POST /login`, `POST /password` (change, needs current),
   `GET|PUT /history?user=`. Browser requests must match `ALLOW_ORIGIN`.
 
+## Async video coaching (R2) — one-time setup
+
+The same Worker also powers **Form Review**: athletes send a movement clip from a
+strength page / RoxLive, and David reviews it from his **Coach** card (scrub,
+pose overlay, telestration, angle presets, feedback). Clips live in a free
+**Cloudflare R2** bucket; metadata + feedback in the existing KV.
+
+Until the bucket exists and the Worker is redeployed, the `/review/*` routes
+return `503` and the app shows *"Coach review isn't set up on the server yet."*
+To turn it on (≈2 min):
+
+```bash
+cd sync
+wrangler r2 bucket create roxlive-review   # the binding is already in wrangler.toml
+wrangler deploy                            # redeploy so /review/* + the R2 binding go live
+```
+
+That's the whole setup — no new secrets, no client changes. After it deploys,
+the **Form Review** card (Coach), the **Send to coach** button on strength A–D,
+and the same button in RoxLive all start working.
+
+Limits & privacy:
+- Per-clip cap **150 MB**; the Worker keeps the **newest 30 clips per athlete**
+  (older ones auto-prune from R2 + KV). R2 free tier = 10 GB — far beyond a crew.
+- Isolation mirrors history: an athlete can only read/delete **their own** clips;
+  **only `david`** sees the full queue and can post feedback. Clips are private —
+  served only to the owner or the coach, behind the session token.
+- Tell the crew their coach can see clips they send (it's a coaching tool).
+
 ## History merge
 
 Server-side union by session id (two devices never clobber each other), tombstone

@@ -12,6 +12,13 @@ compatibility_date = "2024-11-01"
 binding = "HISTORY"
 id = "424a9fbf4fd24b498fe4c9fc64c46337"
 
+# R2 bucket for async video coaching (athlete clips for coach review).
+# Create it once:  wrangler r2 bucket create roxlive-review
+# (free tier = 10 GB). Then redeploy.
+[[r2_buckets]]
+binding = "REVIEW"
+bucket_name = "roxlive-review"
+
 # Optional: lock CORS to your site instead of "*".
 [vars]
 ALLOW_ORIGIN = "https://dsingson5.github.io"

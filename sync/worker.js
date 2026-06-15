@@ -13,6 +13,14 @@
  *   GET  /admin/roster                                      -> { roster:[...] } (admin)
  *   GET  /admin/activity?user=<id>                          -> { events:[...] } (admin)
  *
+ *   Async video coaching (R2 binding REVIEW):
+ *   POST /review/upload?movement=&session=&note=  (raw video body) -> { id }
+ *   GET  /review/list                              -> { items:[...] }  (own; admin=all)
+ *   GET  /review/item?id=<id>                      -> { item }         (owner|admin)
+ *   GET  /review/clip?id=<id>                      -> video bytes      (owner|admin)
+ *   POST /review/feedback { id, text, annotations } -> { ok }          (admin only)
+ *   POST /review/delete   { id }                    -> { ok }          (owner|admin)
+ *
  * Auth: PBKDF2-SHA256(+salt) password hashes in KV (auth:<user>); first login
  * seeds password=name (mustChange). HMAC sessions {u,exp,e}; the per-user epoch
  * `e` is checked against the auth record, so a password change revokes old tokens.
@@ -51,6 +59,14 @@ const ACTIVITY_PER_REQ = 50;
 const TYPE_MAX = 40;
 const DETAIL_MAX = 160;
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
+// Async video coaching (R2-backed review queue)
+const REVIEW_PREFIX = "review:"; // KV meta keys: review:<id>
+const REVIEW_MAX_BYTES = 150 * 1024 * 1024; // per-clip cap
+const REVIEW_PER_OWNER = 30; // keep the newest N clips per athlete
+const MOVE_MAX = 40;
+const NOTE_MAX = 400;
+const FEEDBACK_MAX = 4000;
+const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
 export default {
   async fetch(request, env) {
@@ -79,6 +95,12 @@ export default {
       if (url.pathname === "/admin/roster" && request.method === "GET") return await handleAdminRoster(request, env, cors);
       if (url.pathname === "/admin/activity" && request.method === "GET") return await handleAdminActivity(request, env, cors, url);
       if (url.pathname === "/history") return await handleHistory(request, env, cors, url);
+      if (url.pathname === "/review/upload" && request.method === "POST") return await handleReviewUpload(request, env, cors, url);
+      if (url.pathname === "/review/list" && request.method === "GET") return await handleReviewList(request, env, cors);
+      if (url.pathname === "/review/item" && request.method === "GET") return await handleReviewItem(request, env, cors, url);
+      if (url.pathname === "/review/clip" && request.method === "GET") return await handleReviewClip(request, env, cors, url);
+      if (url.pathname === "/review/feedback" && request.method === "POST") return await handleReviewFeedback(request, env, cors);
+      if (url.pathname === "/review/delete" && request.method === "POST") return await handleReviewDelete(request, env, cors);
       return json({ error: "not found" }, 404, cors);
     } catch (e) {
       if (e && e.tooLarge) return json({ error: "payload too large" }, 413, cors);
@@ -290,6 +312,178 @@ async function handleAdminActivity(request, env, cors, url) {
   if (!USER_RE.test(user) || !CREW_SET.has(user)) return json({ error: "unknown user" }, 403, cors);
   const events = await readActivity(env, user);
   return json({ events: events.slice().reverse() }, 200, cors); // newest first
+}
+
+/* -------------------- async video coaching (review) ---------------------- */
+// Athletes upload a movement clip → stored in R2 (binding REVIEW), metadata in
+// KV (review:<id>). The coach (admin=david) sees the whole queue and posts
+// feedback; everyone else sees only their own clips. Per-user isolation mirrors
+// /history: read = owner-or-admin, feedback = admin-only, delete = owner-or-admin.
+
+const reviewMetaKey = (id) => REVIEW_PREFIX + id;
+const reviewBlobKey = (id) => "clip/" + id;
+function reviewSummary(meta) {
+  return {
+    owner: meta.owner,
+    movement: meta.movement || "",
+    session: meta.session || "",
+    size: meta.size || 0,
+    createdAt: meta.createdAt || 0,
+    status: meta.status || "pending",
+    hasFeedback: !!meta.feedback,
+  };
+}
+
+async function handleReviewUpload(request, env, cors, url) {
+  if (!env.REVIEW) return json({ error: "review storage not configured (add R2 binding REVIEW)" }, 503, cors);
+  const payload = await authedPayload(request, env);
+  if (!payload) return json({ error: "unauthorized" }, 401, cors);
+  const owner = payload.u;
+  const len = Number(request.headers.get("content-length") || 0);
+  if (len > REVIEW_MAX_BYTES) return json({ error: "clip too large (max 150 MB)" }, 413, cors);
+  if (!request.body) return json({ error: "empty body" }, 400, cors);
+  const movement = (url.searchParams.get("movement") || "").slice(0, MOVE_MAX);
+  const session = (url.searchParams.get("session") || "").slice(0, 16);
+  const note = (url.searchParams.get("note") || "").slice(0, NOTE_MAX);
+  const ctype = request.headers.get("content-type") || "video/mp4";
+  const id = bytesToB64url(crypto.getRandomValues(new Uint8Array(12)));
+  // Content-Length can be spoofed or omitted, so enforce the cap DURING
+  // ingestion: abort the stream the instant it exceeds the limit, so an
+  // oversized body is never fully stored (R2 has no server-side byte cap).
+  let seen = 0;
+  const limited = request.body.pipeThrough(
+    new TransformStream({
+      transform(chunk, ctrl) {
+        seen += chunk.byteLength;
+        if (seen > REVIEW_MAX_BYTES) { ctrl.error(new Error("clip too large")); return; }
+        ctrl.enqueue(chunk);
+      },
+    })
+  );
+  try {
+    await env.REVIEW.put(reviewBlobKey(id), limited, { httpMetadata: { contentType: ctype } });
+  } catch (e) {
+    await env.REVIEW.delete(reviewBlobKey(id)).catch(() => {});
+    return json({ error: "clip too large (max 150 MB)" }, 413, cors);
+  }
+  const head = await env.REVIEW.head(reviewBlobKey(id));
+  const size = head ? head.size : seen;
+  const meta = { id, owner, movement, session, note, ctype, size, createdAt: Date.now(), status: "pending" };
+  await env.HISTORY.put(reviewMetaKey(id), JSON.stringify(meta), { metadata: reviewSummary(meta) });
+  await pruneOwnerClips(env, owner);
+  await appendActivity(env, owner, [{ t: Date.now(), type: "review_submit", detail: (movement || session || "clip").slice(0, DETAIL_MAX) }]);
+  return json({ ok: true, id }, 200, cors);
+}
+
+async function listReviewSummaries(env) {
+  const out = [];
+  let cursor;
+  do {
+    const res = await env.HISTORY.list({ prefix: REVIEW_PREFIX, cursor });
+    for (const k of res.keys) out.push({ id: k.name.slice(REVIEW_PREFIX.length), meta: k.metadata || {} });
+    cursor = res.list_complete ? null : res.cursor;
+  } while (cursor);
+  return out;
+}
+
+async function handleReviewList(request, env, cors) {
+  if (!env.REVIEW) return json({ error: "review storage not configured" }, 503, cors);
+  const payload = await authedPayload(request, env);
+  if (!payload) return json({ error: "unauthorized" }, 401, cors);
+  const admin = isAdmin(payload);
+  const all = await listReviewSummaries(env);
+  const items = all
+    .filter((x) => admin || x.meta.owner === payload.u)
+    .map((x) => ({ id: x.id, ...x.meta }))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  return json({ items }, 200, cors);
+}
+
+async function loadReviewMeta(env, id) {
+  const raw = await env.HISTORY.get(reviewMetaKey(id));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function handleReviewItem(request, env, cors, url) {
+  const payload = await authedPayload(request, env);
+  if (!payload) return json({ error: "unauthorized" }, 401, cors);
+  const id = url.searchParams.get("id") || "";
+  if (!ID_RE.test(id)) return json({ error: "bad id" }, 400, cors);
+  const meta = await loadReviewMeta(env, id);
+  if (!meta) return json({ error: "not found" }, 404, cors);
+  if (meta.owner !== payload.u && !isAdmin(payload)) return json({ error: "forbidden" }, 403, cors);
+  return json({ item: meta }, 200, cors);
+}
+
+async function handleReviewClip(request, env, cors, url) {
+  if (!env.REVIEW) return json({ error: "review storage not configured" }, 503, cors);
+  const payload = await authedPayload(request, env);
+  if (!payload) return json({ error: "unauthorized" }, 401, cors);
+  const id = url.searchParams.get("id") || "";
+  if (!ID_RE.test(id)) return json({ error: "bad id" }, 400, cors);
+  const meta = await loadReviewMeta(env, id);
+  if (!meta) return json({ error: "not found" }, 404, cors);
+  if (meta.owner !== payload.u && !isAdmin(payload)) return json({ error: "forbidden" }, 403, cors);
+  const obj = await env.REVIEW.get(reviewBlobKey(id));
+  if (!obj) return json({ error: "clip missing" }, 404, cors);
+  return new Response(obj.body, {
+    headers: { "content-type": meta.ctype || "video/mp4", "content-length": String(meta.size || obj.size || 0), "cache-control": "private, max-age=3600", ...cors },
+  });
+}
+
+async function handleReviewFeedback(request, env, cors) {
+  if (!env.REVIEW) return json({ error: "review storage not configured" }, 503, cors);
+  const payload = await authedPayload(request, env);
+  if (!isAdmin(payload)) return json({ error: "forbidden" }, 403, cors); // coach only
+  const body = await readJson(request);
+  const id = String((body && body.id) || "");
+  if (!ID_RE.test(id)) return json({ error: "bad id" }, 400, cors);
+  const meta = await loadReviewMeta(env, id);
+  if (!meta) return json({ error: "not found" }, 404, cors);
+  const text = typeof body.text === "string" ? body.text.slice(0, FEEDBACK_MAX) : "";
+  const annotations = body.annotations != null ? body.annotations : undefined; // opaque JSON (capped by MAX_BODY_BYTES)
+  meta.feedback = { text, annotations, by: payload.u, at: Date.now() };
+  meta.status = "reviewed";
+  await env.HISTORY.put(reviewMetaKey(id), JSON.stringify(meta), { metadata: reviewSummary(meta) });
+  await appendActivity(env, meta.owner, [{ t: Date.now(), type: "review_feedback", detail: (meta.movement || "clip").slice(0, DETAIL_MAX) }]);
+  return json({ ok: true }, 200, cors);
+}
+
+async function handleReviewDelete(request, env, cors) {
+  if (!env.REVIEW) return json({ error: "review storage not configured" }, 503, cors);
+  const payload = await authedPayload(request, env);
+  if (!payload) return json({ error: "unauthorized" }, 401, cors);
+  const body = await readJson(request);
+  const id = String((body && body.id) || "");
+  if (!ID_RE.test(id)) return json({ error: "bad id" }, 400, cors);
+  const meta = await loadReviewMeta(env, id);
+  if (!meta) return json({ ok: true }, 200, cors); // already gone
+  if (meta.owner !== payload.u && !isAdmin(payload)) return json({ error: "forbidden" }, 403, cors);
+  await env.REVIEW.delete(reviewBlobKey(id));
+  await env.HISTORY.delete(reviewMetaKey(id));
+  return json({ ok: true }, 200, cors);
+}
+
+// Keep only the newest REVIEW_PER_OWNER clips for an athlete (R2 + KV).
+async function pruneOwnerClips(env, owner) {
+  try {
+    const mine = (await listReviewSummaries(env))
+      .filter((x) => x.meta.owner === owner)
+      .map((x) => ({ id: x.id, createdAt: x.meta.createdAt || 0 }));
+    if (mine.length <= REVIEW_PER_OWNER) return;
+    mine.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)); // oldest first
+    for (const d of mine.slice(0, mine.length - REVIEW_PER_OWNER)) {
+      await env.REVIEW.delete(reviewBlobKey(d.id));
+      await env.HISTORY.delete(reviewMetaKey(d.id));
+    }
+  } catch {
+    /* best-effort */
+  }
 }
 
 /* ------------------------------- crypto ---------------------------------- */
