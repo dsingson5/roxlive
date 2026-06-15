@@ -203,6 +203,16 @@ function RpeSection({ summary, onRpe }: { summary: SessionSummary; onRpe: (rpe: 
   );
 }
 
+/** Branded default title for a Strava upload, tailored to the session type. */
+function stravaDefaultName(summary: SessionSummary): string {
+  const brand = "RoxLive by Hybrid Crew";
+  if (summary.mode === "hyrox") return `HYROX · ${brand}`;
+  if (summary.mode === "workout") return `${summary.planTitle?.trim() || "Workout"} · ${brand}`;
+  // Free session — name it after the sport when we know it.
+  const sport = summary.modality && summary.modality !== "mixed" ? modalityDef(summary.modality).label : null;
+  return sport ? `${sport} · ${brand}` : `${brand} session`;
+}
+
 function StravaPost({
   summary,
   series,
@@ -212,11 +222,10 @@ function StravaPost({
   series: SeriesPoint[];
   post: (s: SessionSummary, ser: SeriesPoint[], o: { name: string; description: string }) => Promise<PostResult>;
 }) {
-  const defaultName =
-    summary.mode === "workout" ? summary.planTitle ?? "RoxLive workout" : summary.mode === "hyrox" ? "RoxLive HYROX session" : "RoxLive session";
+  const defaultName = stravaDefaultName(summary);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(defaultName);
-  const [desc, setDesc] = useState("Recorded with RoxLive");
+  const [desc, setDesc] = useState("Recorded with RoxLive by Hybrid Crew");
   const [state, setState] = useState<"idle" | "posting" | "done" | "error">("idle");
   const [msg, setMsg] = useState<string | null>(null);
 
