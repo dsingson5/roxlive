@@ -24,10 +24,27 @@ export interface StravaTokens {
   athleteName?: string;
 }
 
+/**
+ * Make a pasted Worker URL usable. The #1 setup mistake is omitting the scheme
+ * ("roxlive-strava.x.workers.dev") — without it, fetch() treats the value as a
+ * path RELATIVE to the RoxLive page, so the POST lands on GitHub Pages and comes
+ * back as a bare HTML 405. Prepend https:// when there's no scheme, trim, and
+ * drop trailing slashes. Applied on both save and load so existing configs heal.
+ */
+export function normalizeWorkerUrl(u: string): string {
+  let s = (u || "").trim();
+  if (!s) return "";
+  if (!/^https?:\/\//i.test(s)) s = "https://" + s.replace(/^\/+/, "");
+  return s.replace(/\/+$/, "");
+}
+
 export function loadConfig(): StravaConfig {
   try {
     const raw = localStorage.getItem(CFG_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const c = JSON.parse(raw) as Partial<StravaConfig>;
+      return { clientId: (c.clientId || "").trim(), workerUrl: normalizeWorkerUrl(c.workerUrl || "") };
+    }
   } catch {
     /* ignore */
   }
@@ -35,7 +52,7 @@ export function loadConfig(): StravaConfig {
 }
 export function saveConfig(c: StravaConfig): void {
   try {
-    localStorage.setItem(CFG_KEY, JSON.stringify({ clientId: c.clientId.trim(), workerUrl: c.workerUrl.trim() }));
+    localStorage.setItem(CFG_KEY, JSON.stringify({ clientId: c.clientId.trim(), workerUrl: normalizeWorkerUrl(c.workerUrl) }));
   } catch {
     /* ignore */
   }
@@ -102,14 +119,68 @@ export function beginAuthorize(): void {
 
 async function callWorker(action: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   const cfg = loadConfig();
-  const res = await fetch(cfg.workerUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ action, ...payload }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error || `Worker HTTP ${res.status}`);
-  return data as Record<string, unknown>;
+  let res: Response;
+  try {
+    res = await fetch(cfg.workerUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action, ...payload }),
+    });
+  } catch (e) {
+    throw new Error(`Couldn't reach the Worker URL — check Settings → Strava (${(e as Error).message}).`);
+  }
+  const text = await res.text();
+  let data: Record<string, unknown> = {};
+  try {
+    data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  } catch {
+    /* response wasn't JSON — almost always the wrong URL (a web page, not the Worker) */
+  }
+  if (!res.ok) {
+    if (typeof (data as { error?: string }).error === "string") throw new Error((data as { error: string }).error);
+    // A non-JSON error body means the URL points at a website, not your Worker.
+    throw new Error(
+      `The Worker URL returned a web page (HTTP ${res.status}), not your Worker. ` +
+        `It must start with https:// and end in .workers.dev — check Settings → Strava.`
+    );
+  }
+  return data;
+}
+
+/**
+ * Probe the configured Worker URL without touching Strava. Distinguishes
+ * "reachable Worker" from "that's a website / wrong URL" so setup mistakes are
+ * obvious before the OAuth round-trip.
+ */
+export async function testWorker(urlOverride?: string): Promise<{ ok: boolean; message: string }> {
+  const url = urlOverride != null ? normalizeWorkerUrl(urlOverride) : loadConfig().workerUrl;
+  if (!url) return { ok: false, message: "Add a Worker URL first." };
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "__ping" }),
+    });
+  } catch (e) {
+    return { ok: false, message: `Couldn't reach it: ${(e as Error).message}. Check the URL.` };
+  }
+  const textRes = await res.text();
+  let data: { error?: string } | null = null;
+  try {
+    data = JSON.parse(textRes) as { error?: string };
+  } catch {
+    return {
+      ok: false,
+      message: `That URL returned a web page (HTTP ${res.status}), not your Worker. It must start with https:// and end in .workers.dev.`,
+    };
+  }
+  if (data && typeof data.error === "string") {
+    if (/unknown action/i.test(data.error)) return { ok: true, message: "Worker reachable ✓ — Client ID & Secret are set. Tap Connect Strava." };
+    if (/missing STRAVA_CLIENT/i.test(data.error)) return { ok: false, message: "Worker is reachable, but STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET aren't set on it." };
+    return { ok: true, message: `Worker reachable ✓ (${data.error}).` };
+  }
+  return { ok: true, message: "Worker reachable ✓." };
 }
 
 /**

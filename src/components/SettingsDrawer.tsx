@@ -4,6 +4,7 @@ import type { AthleteProfile } from "../types";
 import { zoneBounds } from "../lib/zones";
 import { VISION_MODELS } from "../lib/vision";
 import type { StravaConfig } from "../lib/strava";
+import { testWorker } from "../lib/strava";
 import type { SyncConfig } from "../lib/sync";
 
 export function SettingsDrawer({
@@ -169,6 +170,14 @@ function StravaSection({
   const [workerUrl, setWorkerUrl] = useState(s.config.workerUrl);
   const dirty = clientId !== s.config.clientId || workerUrl !== s.config.workerUrl;
   const configured = clientId.trim() && workerUrl.trim();
+  const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+  const runTest = async () => {
+    setTesting(true);
+    setTest(null);
+    setTest(await testWorker(workerUrl));
+    setTesting(false);
+  };
 
   return (
     <div>
@@ -188,7 +197,7 @@ function StravaSection({
             One-time setup needed (Strava app + free Cloudflare Worker) — see strava/README.md in the repo. Paste your Client ID and Worker URL, save, then connect.
           </p>
           <input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Strava Client ID" className="inp" autoComplete="off" />
-          <input value={workerUrl} onChange={(e) => setWorkerUrl(e.target.value)} placeholder="Worker URL (https://…workers.dev)" className="inp mt-2" autoComplete="off" />
+          <input value={workerUrl} onChange={(e) => { setWorkerUrl(e.target.value); setTest(null); }} placeholder="Worker URL (https://…workers.dev)" className="inp mt-2" autoComplete="off" />
           <div className="flex gap-2 mt-2">
             <button
               onClick={() => s.onSaveConfig({ clientId, workerUrl })}
@@ -196,6 +205,14 @@ function StravaSection({
               className="btn-ghost h-9 px-4 text-[13px] disabled:opacity-40"
             >
               Save
+            </button>
+            <button
+              onClick={runTest}
+              disabled={!workerUrl.trim() || testing}
+              className="btn-ghost h-9 px-4 text-[13px] disabled:opacity-40"
+              title="Check the Worker URL is reachable before connecting"
+            >
+              {testing ? "Testing…" : "Test"}
             </button>
             <button
               onClick={s.onConnect}
@@ -207,6 +224,18 @@ function StravaSection({
               Connect Strava
             </button>
           </div>
+          {test && (
+            <div
+              className="text-[11px] mt-2 rounded-lg p-2 leading-relaxed"
+              style={{
+                color: test.ok ? "var(--color-mint)" : "var(--color-amber)",
+                background: test.ok ? "rgba(61,255,181,0.08)" : "rgba(255,176,46,0.08)",
+                border: `1px solid ${test.ok ? "rgba(61,255,181,0.3)" : "rgba(255,176,46,0.3)"}`,
+              }}
+            >
+              {test.message}
+            </div>
+          )}
         </>
       )}
     </div>
