@@ -321,6 +321,9 @@ export interface SessionSummary {
   adherencePct?: number | null;
   /** workout-mode only: the plan that was run */
   planTitle?: string;
+  /** the full plan that was run — lets the user repeat this exact workout later
+   *  (workout mode = the built/imported plan; hyrox = the race plan; free = none) */
+  plan?: WorkoutPlan;
   avgHr: number | null;
   maxHr: number | null;
   distanceM: number;

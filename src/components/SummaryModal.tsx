@@ -14,6 +14,7 @@ export function SummaryModal({
   fullSeries,
   strava,
   onRpe,
+  onRepeat,
   onClose,
 }: {
   summary: SessionSummary | null;
@@ -25,6 +26,8 @@ export function SummaryModal({
   };
   /** persist an RPE log for this session */
   onRpe?: (rpe: RpeLog) => void;
+  /** when viewing a past session: load this workout and arm it to do again now */
+  onRepeat?: () => void;
   onClose: () => void;
 }) {
   return (
@@ -118,6 +121,16 @@ export function SummaryModal({
                     ))}
                   </div>
                 </>
+              )}
+
+              {onRepeat && (
+                <button
+                  onClick={onRepeat}
+                  className="btn-volt w-full h-12 mt-5 text-sm font-bold flex items-center justify-center gap-2"
+                  title="Load this workout and do it again now"
+                >
+                  ↻ Do this workout again
+                </button>
               )}
 
               {onRpe && <RpeSection summary={summary} onRpe={onRpe} />}

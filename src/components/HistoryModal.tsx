@@ -24,6 +24,7 @@ export function HistoryModal({
   synced,
   onClose,
   onOpen,
+  onRepeat,
   onDelete,
   onClear,
 }: {
@@ -35,6 +36,8 @@ export function HistoryModal({
   synced?: boolean;
   onClose: () => void;
   onOpen: (s: SessionSummary) => void;
+  /** load this past workout and arm it to do again now */
+  onRepeat: (s: SessionSummary) => void;
   onDelete: (id: string) => void;
   onClear: () => void;
 }) {
@@ -51,10 +54,10 @@ export function HistoryModal({
 
   return (
     <AnimatePresence>
-      {open && (
-        <>
-          <motion.div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
+      {open && [
+          <motion.div key="hist-backdrop" className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />,
           <motion.aside
+            key="hist-panel"
             className="fixed right-0 top-0 bottom-0 z-50 w-[min(560px,96vw)] bg-[var(--color-bg2)] border-l border-[var(--color-line2)] p-5 sm:p-6 overflow-y-auto"
             initial={{ x: "100%" }}
             animate={{ x: 0 }}
@@ -101,7 +104,7 @@ export function HistoryModal({
             ) : (
               <div className="space-y-2.5">
                 {shown.map((s) => (
-                  <HistoryRow key={s.id} s={s} onOpen={() => onOpen(s)} onDelete={() => onDelete(s.id)} />
+                  <HistoryRow key={s.id} s={s} onOpen={() => onOpen(s)} onRepeat={() => onRepeat(s)} onDelete={() => onDelete(s.id)} />
                 ))}
               </div>
             )}
@@ -115,9 +118,8 @@ export function HistoryModal({
                 Clear all history
               </button>
             )}
-          </motion.aside>
-        </>
-      )}
+          </motion.aside>,
+      ]}
     </AnimatePresence>
   );
 }
@@ -137,7 +139,7 @@ function FilterChip({ label, count, active, onClick }: { label: string; count: n
   );
 }
 
-function HistoryRow({ s, onOpen, onDelete }: { s: SessionSummary; onOpen: () => void; onDelete: () => void }) {
+function HistoryRow({ s, onOpen, onRepeat, onDelete }: { s: SessionSummary; onOpen: () => void; onRepeat: () => void; onDelete: () => void }) {
   const date = new Date(s.startedAt);
   const dateStr = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const timeStr = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
@@ -187,12 +189,22 @@ function HistoryRow({ s, onOpen, onDelete }: { s: SessionSummary; onOpen: () => 
           <button
             onClick={onDelete}
             className="text-[var(--color-ink-faint)] hover:text-[var(--color-red)] text-sm w-6 h-6 grid place-items-center transition-colors"
-            title="Delete session"
+            title="Delete session — only removes it for you"
           >
             ✕
           </button>
         </div>
       </div>
+
+      {/* Repeat — load this exact workout and arm it to do again now. */}
+      <button
+        onClick={onRepeat}
+        className="mt-2.5 w-full h-9 rounded-lg text-[12px] font-semibold flex items-center justify-center gap-1.5 transition-colors"
+        style={{ background: "rgba(255,255,255,0.04)", color: MODE_COLOR[s.mode], border: "1px solid var(--color-line)" }}
+        title="Load this workout and do it again now"
+      >
+        ↻ Do this workout again
+      </button>
     </div>
   );
 }

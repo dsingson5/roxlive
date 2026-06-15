@@ -193,6 +193,17 @@ export function adoptParsed(parsed: ParsedWorkout, source: WorkoutPlan["source"]
   };
 }
 
+/** Deep-clone a plan with fresh ids — used to "do a past workout again" without
+ *  mutating the stored history entry it was loaded from. */
+export function clonePlan(plan: WorkoutPlan): WorkoutPlan {
+  return {
+    ...plan,
+    id: uid("plan"),
+    createdAt: Math.round(performance.timeOrigin + performance.now()),
+    intervals: plan.intervals.map((iv) => ({ ...iv, id: uid("iv"), target: { ...iv.target } })),
+  };
+}
+
 function clampDur(v: number): number {
   if (!Number.isFinite(v) || v <= 0) return 60;
   return Math.min(3600, Math.round(v));

@@ -13,13 +13,14 @@ import type {
   PlannedSegment,
   AthleteProfile,
   WorkoutPlan,
+  WorkoutInterval,
   VoiceSettings,
 } from "./types";
 import { DEFAULT_VOICE } from "./types";
 import { SINGLE_MODALITIES, guessModality, type Modality } from "./lib/modality";
 import { buildRace } from "./data/hyrox";
 import { selfTestDFA } from "./lib/dfa";
-import { cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan } from "./lib/workout";
+import { clonePlan, cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan } from "./lib/workout";
 import { VISION_MODELS } from "./lib/vision";
 import { VoiceCoach } from "./lib/voice";
 import { addToHistory, clearHistory, deleteFromHistory, loadHistory, pullAndMerge, updateHistory } from "./lib/history";
@@ -402,6 +403,36 @@ export default function App() {
     savePlan(p);
   };
 
+  /** "Do this workout again": load a past session's workout and arm it now. */
+  const repeatSession = (s: SessionSummary) => {
+    setHistoryOpen(false);
+    setHistoryDetail(null);
+    if (s.mode === "hyrox") {
+      setWorkoutType("hyrox");
+      handleModeChange("hyrox");
+      return;
+    }
+    if (s.mode === "free") {
+      if (s.modality && s.modality !== "mixed") persistFreeModality(s.modality);
+      setWorkoutType("free");
+      handleModeChange("free");
+      return;
+    }
+    // Workout mode: restore the stored plan (or rebuild it from this session's laps
+    // for sessions saved before plans were embedded), then arm Workout mode.
+    const src = planFromSession(s);
+    setWorkoutType("workout");
+    if (src) {
+      const fresh = clonePlan(src);
+      setPlan(fresh);
+      savePlan(fresh);
+      handleModeChange("workout");
+    } else {
+      handleModeChange("workout");
+      setBuilderOpen(true);
+    }
+  };
+
   // Run DFA self-test once in dev (verifiable via console).
   useEffect(() => {
     if (import.meta.env.DEV) selfTestDFA();
@@ -559,6 +590,9 @@ export default function App() {
       },
       sessionModality
     );
+    // Keep the source plan with the session so the user can repeat this exact
+    // workout later (workout = the built/imported plan; hyrox = the race plan).
+    s.plan = raceMode === "workout" ? plan ?? undefined : raceMode === "hyrox" ? hyroxPlan : undefined;
     fullSeriesRef.current = [...series];
     eng.stop();
     clearAnchor();
@@ -825,6 +859,7 @@ export default function App() {
         summary={historyDetail}
         fullSeries={historyDetail?.series ?? []}
         strava={{ connected: stravaConnected, post: strava.postActivity }}
+        onRepeat={historyDetail ? () => repeatSession(historyDetail) : undefined}
         onRpe={(rpe) => {
           if (!historyDetail) return;
           setHistoryDetail({ ...historyDetail, rpe });
@@ -840,6 +875,7 @@ export default function App() {
         synced={signedIn}
         onClose={() => setHistoryOpen(false)}
         onOpen={(s) => setHistoryDetail(s)}
+        onRepeat={repeatSession}
         onDelete={(id) => setHistory(deleteFromHistory(id))}
         onClear={() => setHistory(clearHistory())}
       />
@@ -1014,6 +1050,30 @@ function computeSegmentRecords(
     };
   });
   return out;
+}
+
+/** Recover a runnable plan from a saved session — the embedded plan if present,
+ *  otherwise rebuilt from its lap records (sessions saved before plans were stored). */
+function planFromSession(s: SessionSummary): WorkoutPlan | null {
+  if (s.plan && s.plan.intervals.length) return s.plan;
+  if (s.mode === "free" || !s.segments.length) return null;
+  const modality = s.modality === "mixed" ? undefined : s.modality;
+  const intervals: WorkoutInterval[] = s.segments.map((seg, i) => ({
+    id: `iv-${i}`,
+    name: seg.label || `Interval ${i + 1}`,
+    kind: seg.kind === "run" ? "work" : "active",
+    durationSec: Math.max(5, Math.round(seg.splitSec ?? 60)),
+    target: { type: "none" },
+    modality,
+  }));
+  return {
+    id: "redo",
+    title: s.planTitle ?? (s.mode === "hyrox" ? "HYROX" : "Workout"),
+    source: "sample",
+    createdAt: 0,
+    intervals,
+    modality: s.modality,
+  };
 }
 
 function buildSummary(
