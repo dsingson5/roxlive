@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { motion } from "motion/react";
 import { useEngine } from "./hooks/useEngine";
 import { useWorkoutRunner } from "./hooks/useWorkoutRunner";
@@ -61,12 +61,17 @@ import { HistoryModal } from "./components/HistoryModal";
 import { CountdownOverlay } from "./components/CountdownOverlay";
 import { SquadView } from "./components/SquadView";
 
+// Form Lab pulls in MediaPipe (from CDN) — lazy-load so it never touches the
+// main bundle or load time; the chunk arrives only when the user opens it.
+const FormLab = lazy(() => import("./components/FormLab").then((m) => ({ default: m.FormLab })));
+
 export default function App() {
   const eng = useEngine();
   const { snapshot: snap, series, profile } = eng;
 
   const [raceMode, setRaceMode] = useState<"free" | "hyrox" | "workout" | "squad">("free");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [manualFocus, setManualFocus] = useState<number | null>(null);
 
@@ -433,9 +438,15 @@ export default function App() {
     }
   };
 
-  // Run DFA self-test once in dev (verifiable via console).
+  // Run DFA + gait self-tests once in dev (verifiable via console).
   useEffect(() => {
-    if (import.meta.env.DEV) selfTestDFA();
+    if (import.meta.env.DEV) {
+      selfTestDFA();
+      import("./lib/gait").then((m) => {
+        const r = m.selfTestGait();
+        console.log(`[gait selfTest] ${r.ok ? "PASS" : "FAIL"} — ${r.detail}`);
+      });
+    }
   }, []);
 
   // Current race segment derived from the elapsed schedule (pacing guide).
@@ -666,6 +677,7 @@ export default function App() {
         onStop={handleStop}
         onSettings={() => setSettingsOpen(true)}
         onHistory={() => { setHistory(loadHistory()); setHistoryOpen(true); syncNow(); logActivity("history_view"); }}
+        onForm={() => { setFormOpen(true); logActivity("form_lab"); }}
         onPiP={pip.toggle}
         pipActive={pip.active}
         pipSupported={pip.supported}
@@ -879,6 +891,13 @@ export default function App() {
         onDelete={(id) => setHistory(deleteFromHistory(id))}
         onClear={() => setHistory(clearHistory())}
       />
+
+      {/* Form Lab — camera-based cadence & running form (lazy-loaded). */}
+      {formOpen && (
+        <Suspense fallback={<div className="fixed inset-0 z-[60] grid place-items-center bg-[var(--color-bg)]"><div className="animate-spin w-8 h-8 border-2 border-[var(--color-volt)] border-t-transparent rounded-full" /></div>}>
+          <FormLab onClose={() => setFormOpen(false)} />
+        </Suspense>
+      )}
 
       {/* Huge 3-2-1 countdown for the end of the current interval / segment. */}
       <CountdownOverlay seconds={countdown.seconds} label={countdown.label} />
