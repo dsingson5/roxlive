@@ -344,6 +344,9 @@ export function FormLab({ onClose }: { onClose: () => void }) {
                             ? "Place the phone on a tripod, perpendicular to the runner, at hip height — runner centered, full body in frame."
                             : "Upload a side-view clip (perpendicular, hip height). Post-hoc analysis reads every frame, so it's the most accurate."}
                         </div>
+                        <div className="text-[11px] text-[var(--color-ink-faint)] max-w-sm mx-auto mt-3 leading-relaxed">
+                          <span className="text-[var(--color-amber)]">ⓘ</span> Form Lab reads cadence &amp; running form from the camera only. It does <span className="text-[var(--color-ink-dim)]">not</span> record pace, distance, power or heart rate — for those, run a session in the main analyzer with a sensor (and GPS or a footpod for pace).
+                        </div>
                         {errorMsg && <div className="text-[var(--color-amber)] text-sm mt-3">{errorMsg}</div>}
                       </>
                     )}

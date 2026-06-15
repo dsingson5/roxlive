@@ -973,6 +973,14 @@ function SessionSetup({
               );
             })}
           </div>
+          {freeModality === "run" && (
+            <div className="mt-2.5 text-[11px] text-[var(--color-ink-faint)] leading-relaxed flex items-start gap-1.5">
+              <span className="text-[var(--color-amber)] mt-px">ⓘ</span>
+              <span>
+                Pace &amp; distance need GPS (outdoors) or a Bluetooth footpod. <span className="text-[var(--color-ink-dim)]">On a treadmill, connect a footpod — otherwise pace &amp; distance aren&apos;t recorded.</span> RoxLive tracks heart rate, pace &amp; running form, not running power.
+              </span>
+            </div>
+          )}
         </div>
       )}
 
