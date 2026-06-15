@@ -9,6 +9,7 @@ export function TopBar({
   mode,
   raceMode,
   onSectionChange,
+  onHub,
   onConnect,
   onDemo,
   onStop,
@@ -25,6 +26,8 @@ export function TopBar({
   mode: SourceMode;
   raceMode: "free" | "hyrox" | "workout" | "squad";
   onSectionChange: (s: "workout" | "squad") => void;
+  /** present when launched from the Hybrid Crew hub — back to the menu */
+  onHub?: () => void;
   onConnect: () => void;
   onDemo: () => void;
   onStop: () => void;
@@ -51,6 +54,12 @@ export function TopBar({
             <div className="text-[9px] tracking-[0.2em] text-[var(--color-ink-faint)] mt-0.5 hidden sm:block">REAL-TIME ANALYZER</div>
           </div>
         </div>
+
+        {onHub && (
+          <button onClick={onHub} className="btn-ghost h-9 px-2.5 text-[12px] flex items-center gap-1 shrink-0" title="Back to the Hybrid Crew menu">
+            <HomeIcon /> <span className="hidden sm:inline">Hub</span>
+          </button>
+        )}
 
         {/* section segmented control */}
         <div className="hidden md:flex items-center bg-white/[0.04] rounded-xl p-0.5 border border-[var(--color-line)]">
@@ -202,3 +211,4 @@ const GearIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="no
 const HistoryIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v5h5" /><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" /><path d="M12 7v5l4 2" /></svg>);
 const PiPIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" /><rect x="12" y="12" width="8" height="6" rx="1" fill="currentColor" stroke="none" /></svg>);
 const CoachIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>);
+const HomeIcon = () => (<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M9 22V12h6v10" /></svg>);

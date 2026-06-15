@@ -143,7 +143,9 @@ function lastSeen(r: RosterEntry): string {
 function actLabel(e: ActivityEvent): string {
   switch (e.type) {
     case "login": return "Signed in";
-    case "open": return "Opened the app";
+    case "open": return "Opened RoxLive";
+    case "hub_open": return "Opened the hub";
+    case "card": return `Opened: ${e.detail || "a card"}`;
     case "mode": return `Opened ${e.detail || "a mode"}`;
     case "workout_start": return `Started: ${e.detail || "workout"}`;
     case "workout_done": return `Finished a workout${e.detail ? ` (${e.detail})` : ""}`;

@@ -629,6 +629,7 @@ export default function App() {
         mode={eng.mode}
         raceMode={raceMode}
         onSectionChange={handleSectionChange}
+        onHub={crewUser ? () => { window.location.href = "../hybrid-crew/"; } : undefined}
         onConnect={handleConnect}
         onDemo={handleDemo}
         onStop={handleStop}
