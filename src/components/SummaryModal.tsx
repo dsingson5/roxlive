@@ -14,7 +14,10 @@ export function SummaryModal({
   fullSeries,
   strava,
   onRpe,
+  onFeel,
   onRepeat,
+  unsaved,
+  onKeep,
   onClose,
 }: {
   summary: SessionSummary | null;
@@ -26,8 +29,14 @@ export function SummaryModal({
   };
   /** persist an RPE log for this session */
   onRpe?: (rpe: RpeLog) => void;
+  /** persist the overall how-you-feel check */
+  onFeel?: (feel: "strong" | "normal" | "weak") => void;
   /** when viewing a past session: load this workout and arm it to do again now */
   onRepeat?: () => void;
+  /** true when this session is <10 s and not yet recorded — ask keep/delete */
+  unsaved?: boolean;
+  /** keep (record) an unsaved short session */
+  onKeep?: () => void;
   onClose: () => void;
 }) {
   return (
@@ -62,6 +71,18 @@ export function SummaryModal({
                   </span>
                 )}
               </div>
+
+              {unsaved && (
+                <div className="card p-3 mb-4" style={{ borderColor: "rgba(255,176,46,0.4)" }}>
+                  <div className="text-[13px] text-[var(--color-ink-dim)] mb-2">
+                    ⏱ Only {fmtClock(summary.durationSec)} — too short to log automatically. Keep it anyway, or delete?
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={onClose} className="btn-ghost flex-1 h-10 text-sm" style={{ color: "var(--color-red)", borderColor: "rgba(255,77,77,0.35)" }}>Delete</button>
+                    <button onClick={onKeep} className="btn-volt flex-1 h-10 text-sm font-semibold">Keep it</button>
+                  </div>
+                </div>
+              )}
 
               {summary.mode === "workout" && summary.adherencePct != null && (
                 <div className="card p-4 mb-4 flex items-center justify-between" style={{ borderColor: summary.adherencePct >= 70 ? "rgba(61,255,181,0.35)" : "rgba(255,176,46,0.35)" }}>
@@ -133,6 +154,8 @@ export function SummaryModal({
                 </button>
               )}
 
+              {onFeel && <FeelSection summary={summary} onFeel={onFeel} />}
+
               {onRpe && <RpeSection summary={summary} onRpe={onRpe} />}
 
               {strava?.connected && (
@@ -157,6 +180,40 @@ export function SummaryModal({
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+function FeelSection({ summary, onFeel }: { summary: SessionSummary; onFeel: (f: "strong" | "normal" | "weak") => void }) {
+  const [feel, setFeel] = useState<"strong" | "normal" | "weak" | null>(summary.feel ?? null);
+  const opts: { id: "strong" | "normal" | "weak"; label: string; glyph: string; color: string }[] = [
+    { id: "strong", label: "Strong", glyph: "💪", color: "var(--color-mint)" },
+    { id: "normal", label: "Normal", glyph: "🙂", color: "var(--color-cyan)" },
+    { id: "weak", label: "Weak", glyph: "🥱", color: "var(--color-amber)" },
+  ];
+  return (
+    <div className="card p-4 mt-4">
+      <div className="card-title mb-2">How do you feel overall?</div>
+      <div className="grid grid-cols-3 gap-2">
+        {opts.map((o) => {
+          const active = feel === o.id;
+          return (
+            <button
+              key={o.id}
+              onClick={() => { setFeel(o.id); onFeel(o.id); }}
+              className="rounded-xl border h-16 flex flex-col items-center justify-center gap-1 transition-colors"
+              style={{
+                borderColor: active ? o.color : "var(--color-line)",
+                background: active ? "rgba(255,255,255,0.05)" : "transparent",
+                color: active ? o.color : "var(--color-ink-dim)",
+              }}
+            >
+              <span className="text-xl leading-none">{o.glyph}</span>
+              <span className="text-[12px] font-semibold">{o.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

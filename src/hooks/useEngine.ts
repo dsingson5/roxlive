@@ -203,6 +203,19 @@ export function useEngine() {
     setMode("idle");
   }, [stopLoop, clearGps]);
 
+  // Re-anchor the session clock + metrics to "now" WITHOUT dropping the live
+  // source (used by the Free START gate so recording begins at the countdown,
+  // not when the sensor first connected). The BLE/sim keep feeding the same
+  // engine; only the accumulators + start time reset.
+  const restartSession = useCallback(() => {
+    engineRef.current.reset();
+    engineRef.current.start(now());
+    lastSeries.current = 0;
+    lastSnap.current = 0;
+    setSeries([]);
+    setSnapshot(engineRef.current.tick(now()));
+  }, []);
+
   const reset = useCallback(() => {
     simRef.current?.stop();
     simRef.current = null;
@@ -252,6 +265,7 @@ export function useEngine() {
     connect,
     stop,
     reset,
+    restartSession,
     simRef,
   };
 }

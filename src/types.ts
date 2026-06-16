@@ -317,6 +317,8 @@ export interface SessionSummary {
   modality?: import("./lib/modality").Modality;
   /** post-workout perceived exertion */
   rpe?: RpeLog;
+  /** overall how-you-feel check, separate from RPE */
+  feel?: "strong" | "normal" | "weak";
   /** workout-mode only: overall % of time spent inside target HR bands */
   adherencePct?: number | null;
   /** workout-mode only: the plan that was run */

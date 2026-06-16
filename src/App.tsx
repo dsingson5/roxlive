@@ -15,6 +15,7 @@ import type {
   WorkoutPlan,
   WorkoutInterval,
   VoiceSettings,
+  MetricsSnapshot,
 } from "./types";
 import { DEFAULT_VOICE } from "./types";
 import { SINGLE_MODALITIES, guessModality, type Modality } from "./lib/modality";
@@ -73,7 +74,14 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
+  /** true when a summary is shown but NOT yet saved (a <10 s session pending keep/delete) */
+  const [summaryUnsaved, setSummaryUnsaved] = useState(false);
   const [manualFocus, setManualFocus] = useState<number | null>(null);
+  // Free START gate: connecting only arms the sensor; the session begins on the
+  // explicit START press, after a big 3-2-1 countdown.
+  const [freeStarted, setFreeStarted] = useState(false);
+  const [startCountdown, setStartCountdown] = useState<number | null>(null);
+  const startTimerRef = useRef<number | null>(null);
 
   // Signed-in Hybrid Crew athlete (same-origin hub) — scopes saved history.
   const crewUser = useMemo(() => resolveCrewUser(), []);
@@ -348,12 +356,36 @@ export default function App() {
   };
   const handleDemo = () => {
     armHyroxVoice();
+    setFreeStarted(false); // Free: arming only — the START press begins recording
     if (raceMode === "workout" && plan) eng.startDemo({ targetHrFn: simTargetFn });
     else eng.startDemo();
   };
   const handleConnect = () => {
     armHyroxVoice();
+    setFreeStarted(false);
     void eng.connect();
+  };
+
+  /** Free START press: big 3-2-1, then re-anchor recording from the countdown end. */
+  const handleFreeStart = () => {
+    if (eng.mode === "idle" || startCountdown != null) return;
+    let n = 3;
+    setStartCountdown(n);
+    const tick = () => {
+      n -= 1;
+      if (n >= 1) {
+        setStartCountdown(n);
+        startTimerRef.current = window.setTimeout(tick, 1000);
+      } else {
+        // GO — recording begins now (not when the sensor connected). Hold "1" a
+        // beat while the dashboard mounts, then clear the overlay cleanly.
+        eng.restartSession();
+        setFreeStarted(true);
+        logActivity("workout_start", `free · ${freeModality}`);
+        startTimerRef.current = window.setTimeout(() => setStartCountdown(null), 450);
+      }
+    };
+    startTimerRef.current = window.setTimeout(tick, 1000);
   };
 
   /**
@@ -375,12 +407,12 @@ export default function App() {
 
   const handleModeChange = (m: "free" | "hyrox" | "workout" | "squad") => {
     if (m !== raceMode) logActivity("mode", m);
-    const leavingSquad = raceMode === "squad" && m !== "squad";
-    if (leavingSquad) squad.stopAll();
-    if (m === "squad" && eng.mode !== "idle") eng.stop(); // free the solo session
     setRaceMode(m);
     hyroxFired.current = new Set(); // avoid stale countdown tokens across modes
-    if (m !== "workout") clearAnchor();
+    // Switching tabs NEVER ends a running session: the solo engine and any squad
+    // keep running in the background, and the workout anchor is preserved while
+    // a session is live. Only tidy the anchor when nothing is running.
+    if (m !== "workout" && eng.mode === "idle") clearAnchor();
   };
 
   // Top-level section: the workout sub-type (free / plan / hyrox) is chosen inside.
@@ -521,7 +553,10 @@ export default function App() {
 
   // Reset transient race UI when a session ends/resets.
   useEffect(() => {
-    if (eng.mode === "idle") setManualFocus(null);
+    if (eng.mode === "idle") {
+      setManualFocus(null);
+      setFreeStarted(false);
+    }
   }, [eng.mode]);
 
   // ---- Picture-in-Picture mini window ----
@@ -607,11 +642,19 @@ export default function App() {
     fullSeriesRef.current = [...series];
     eng.stop();
     clearAnchor();
-    // Persist to history only if the session had real activity.
-    if (s.durationSec >= 5 && (s.avgHr != null || s.distanceM > 0)) {
+    setFreeStarted(false);
+    if (startTimerRef.current) { clearTimeout(startTimerRef.current); startTimerRef.current = null; }
+    setStartCountdown(null);
+    // Auto-save only sessions of real length + data. Anything under 10 s is NOT
+    // recorded yet — the summary asks the user to keep or delete it.
+    const hasActivity = s.avgHr != null || s.distanceM > 0;
+    if (s.durationSec >= 10 && hasActivity) {
       addToHistory(s);
       setHistory(loadHistory());
       logActivity("workout_done", `${s.modality ?? s.mode} · ${Math.round(s.durationSec / 60)}m`);
+      setSummaryUnsaved(false);
+    } else {
+      setSummaryUnsaved(true);
     }
     setSummary(s);
   };
@@ -746,6 +789,9 @@ export default function App() {
               <RaceRail segments={segments} currentIndex={currentIndex} focusIndex={focusIndex} records={records} profile={profile} onFocus={setManualFocus} />
             )}
           </>
+        ) : raceMode === "free" && !freeStarted && !summary ? (
+          /* ---- Free: sensor armed, waiting for START ---- */
+          <FreeArmed snap={snap} freeModality={freeModality} onFreeModality={persistFreeModality} onStart={handleFreeStart} simulated={eng.mode === "demo"} />
         ) : (
           /* ---- Live dashboard ---- */
           <>
@@ -855,13 +901,27 @@ export default function App() {
         summary={summary}
         fullSeries={fullSeriesRef.current}
         strava={{ connected: stravaConnected, post: strava.postActivity }}
+        unsaved={summaryUnsaved}
+        onKeep={() => {
+          if (!summary) return;
+          addToHistory(summary);
+          setHistory(loadHistory());
+          logActivity("workout_done", `${summary.modality ?? summary.mode} · short`);
+          setSummaryUnsaved(false);
+        }}
         onRpe={(rpe) => {
           if (!summary) return;
           setSummary({ ...summary, rpe });
-          setHistory(updateHistory(summary.id, { rpe }));
+          if (!summaryUnsaved) setHistory(updateHistory(summary.id, { rpe }));
+        }}
+        onFeel={(feel) => {
+          if (!summary) return;
+          setSummary({ ...summary, feel });
+          if (!summaryUnsaved) setHistory(updateHistory(summary.id, { feel }));
         }}
         onClose={() => {
           setSummary(null);
+          setSummaryUnsaved(false);
           eng.reset();
         }}
       />
@@ -876,6 +936,11 @@ export default function App() {
           if (!historyDetail) return;
           setHistoryDetail({ ...historyDetail, rpe });
           setHistory(updateHistory(historyDetail.id, { rpe }));
+        }}
+        onFeel={(feel) => {
+          if (!historyDetail) return;
+          setHistoryDetail({ ...historyDetail, feel });
+          setHistory(updateHistory(historyDetail.id, { feel }));
         }}
         onClose={() => setHistoryDetail(null)}
       />
@@ -900,7 +965,7 @@ export default function App() {
       )}
 
       {/* Huge 3-2-1 countdown for the end of the current interval / segment. */}
-      <CountdownOverlay seconds={countdown.seconds} label={countdown.label} />
+      <CountdownOverlay seconds={startCountdown ?? countdown.seconds} label={startCountdown != null ? "Get ready" : countdown.label} />
     </div>
   );
 }
@@ -909,6 +974,54 @@ export default function App() {
 
 /** Idle setup card: choose the workout type (Free / Plan / HYROX) and classify
  *  before starting. Start buttons live in the TopBar (Connect / Simulate). */
+/** Free mode after a sensor is armed: live HR preview + sport pick + big START. */
+function FreeArmed({
+  snap,
+  freeModality,
+  onFreeModality,
+  onStart,
+  simulated,
+}: {
+  snap: MetricsSnapshot;
+  freeModality: Modality;
+  onFreeModality: (m: Modality) => void;
+  onStart: () => void;
+  simulated: boolean;
+}) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card p-5 sm:p-7 text-center max-w-[640px] mx-auto">
+      <div className="text-[11px] mono uppercase tracking-[0.18em] text-[var(--color-ink-faint)]">
+        Sensor armed{simulated ? " · simulated" : ""}
+      </div>
+      <div className="num text-6xl leading-none my-3" style={{ color: snap.hr != null ? "var(--color-volt)" : "var(--color-ink-faint)" }}>
+        {snap.hr ?? "—"}<span className="text-lg text-[var(--color-ink-faint)] ml-1">bpm</span>
+      </div>
+      <div className="text-sm text-[var(--color-ink-dim)] mb-5">Pick your sport, then press START — recording begins after a 3-2-1.</div>
+      <div className="text-[10px] mono uppercase tracking-[0.12em] text-[var(--color-ink-faint)] mb-2">Classify this session</div>
+      <div className="flex flex-wrap gap-2 justify-center mb-6">
+        {SINGLE_MODALITIES.map((m) => {
+          const active = freeModality === m.id;
+          return (
+            <button
+              key={m.id}
+              onClick={() => onFreeModality(m.id)}
+              className={`px-3 h-9 rounded-lg text-sm border transition-colors ${
+                active
+                  ? "bg-[var(--color-volt)] text-black border-transparent font-semibold"
+                  : "bg-[var(--color-surface-2)] text-[var(--color-ink-dim)] border-[var(--color-line)] hover:text-[var(--color-ink)]"
+              }`}
+            >
+              <span className="mr-1">{m.glyph}</span>
+              {m.short}
+            </button>
+          );
+        })}
+      </div>
+      <button onClick={onStart} className="btn-volt h-14 px-14 text-lg font-bold">▶ START</button>
+    </motion.div>
+  );
+}
+
 function SessionSetup({
   raceMode,
   onType,

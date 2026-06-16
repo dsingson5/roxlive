@@ -11,9 +11,9 @@
   if (!window.RoxReview) { console.warn("[review-submit] review-client.js not loaded"); return; }
 
   var CSS = ""
-    + ".rxs-fab{position:fixed;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));z-index:9000;"
-    + "font-family:'Marcellus',Georgia,serif;font-size:13px;letter-spacing:.06em;color:#1a1206;background:linear-gradient(180deg,#e6c088,#d4a868);"
-    + "border:none;border-radius:100px;padding:12px 18px;box-shadow:0 8px 28px rgba(0,0,0,.45);cursor:pointer;display:flex;align-items:center;gap:8px;}"
+    + ".rxs-fab{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));z-index:9000;"
+    + "font-family:'Marcellus',Georgia,serif;font-size:11px;line-height:1.15;letter-spacing:.04em;color:#1a1206;background:linear-gradient(180deg,#e6c088,#d4a868);"
+    + "border:none;border-radius:100px;padding:8px 13px;max-width:62vw;box-shadow:0 6px 20px rgba(0,0,0,.42);cursor:pointer;display:flex;align-items:center;gap:6px;}"
     + ".rxs-fab:hover{filter:brightness(1.06);}"
     + ".rxs-ov{position:fixed;inset:0;z-index:9001;background:rgba(4,2,10,.72);backdrop-filter:blur(4px);display:none;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 14px;}"
     + ".rxs-ov.on{display:flex;}"
@@ -49,7 +49,7 @@
 
   var fab = document.createElement("button");
   fab.className = "rxs-fab";
-  fab.innerHTML = '<span aria-hidden="true">&#127909;</span> Send to coach';
+  fab.innerHTML = '<span aria-hidden="true">&#127909;</span> Video your form &amp; send to coach';
   document.body.appendChild(fab);
 
   var ov = document.createElement("div");
