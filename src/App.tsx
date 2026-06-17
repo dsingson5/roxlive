@@ -847,7 +847,7 @@ export default function App() {
           /* ---- Live dashboard ---- */
           <>
             <motion.div layout className="grid grid-cols-1 lg:grid-cols-12 gap-3">
-              <div className="lg:col-span-3"><HeroHR snap={snap} profile={profile} /></div>
+              <div className="lg:col-span-3"><HeroHR snap={snap} profile={profile} device={eng.device} /></div>
               <div className="lg:col-span-3"><DfaGauge snap={snap} /></div>
               <div className="lg:col-span-6">
                 {raceMode === "hyrox" ? (

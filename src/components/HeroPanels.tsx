@@ -1,11 +1,11 @@
 import { motion } from "motion/react";
-import type { MetricsSnapshot, AthleteProfile } from "../types";
+import type { MetricsSnapshot, AthleteProfile, DeviceInfo } from "../types";
 import { RadialGauge } from "./Charts";
 import { ZONE_DEFS } from "../lib/zones";
 import { alphaBand } from "../lib/dfa";
 import { fmtNum } from "../lib/format";
 
-export function HeroHR({ snap, profile }: { snap: MetricsSnapshot; profile: AthleteProfile }) {
+export function HeroHR({ snap, profile, device }: { snap: MetricsSnapshot; profile: AthleteProfile; device?: DeviceInfo | null }) {
   const hr = snap.hr;
   const zone = snap.zone ?? 1;
   const zoneDef = ZONE_DEFS[zone - 1];
@@ -15,7 +15,8 @@ export function HeroHR({ snap, profile }: { snap: MetricsSnapshot; profile: Athl
   return (
     <div className="card p-5 flex flex-col items-center justify-center relative overflow-hidden">
       <div className="absolute top-4 left-5 card-title">Heart Rate</div>
-      <div className="absolute top-4 right-5 flex items-center gap-1.5 text-[10px] mono text-[var(--color-ink-faint)]">
+      <div className="absolute top-4 right-5 flex items-center gap-2 text-[10px] mono text-[var(--color-ink-faint)]">
+        {device && device.battery != null && <BatteryChip pct={device.battery} simulated={device.simulated} />}
         <span style={{ color }}>{zoneDef.name}</span>
       </div>
 
@@ -123,6 +124,21 @@ function ReliabilityChip({ reliable, beats }: { reliable: boolean; beats: number
     <span className="flex items-center gap-1 text-[10px] mono" style={{ color }}>
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
       {label}
+    </span>
+  );
+}
+
+/** Sensor battery, shown on the always-visible HR panel (mobile included). */
+function BatteryChip({ pct, simulated }: { pct: number; simulated?: boolean }) {
+  const c = pct <= 15 ? "var(--color-red)" : pct <= 35 ? "var(--color-amber)" : "var(--color-mint)";
+  const fill = Math.max(2, Math.min(14, (pct / 100) * 14));
+  return (
+    <span className="flex items-center gap-1" style={{ color: c }} title={`Sensor battery ${pct}%${simulated ? " (simulated)" : ""}`}>
+      <span className="relative inline-block" style={{ width: 17, height: 9, border: `1.5px solid ${c}`, borderRadius: 2 }}>
+        <span className="absolute" style={{ left: 1, top: 1, bottom: 1, width: fill, background: c, borderRadius: 1 }} />
+        <span className="absolute" style={{ right: -3, top: 2.5, width: 2, height: 4, background: c, borderRadius: 1 }} />
+      </span>
+      <span>{pct}%</span>
     </span>
   );
 }

@@ -8,10 +8,41 @@
 
 import type { SeriesPoint, SessionSummary } from "../types";
 import { encodeFitActivity } from "./fit";
+import { resolveCrewUser } from "./user";
 
 const CFG_KEY = "roxlive.strava.cfg.v1";
 const TOK_KEY = "roxlive.strava.tok.v1";
 const STATE_KEY = "roxlive.strava.state";
+
+/**
+ * Strava tokens are PERSONAL, so they must be scoped to the signed-in crew
+ * athlete. Storing them under one device-global key meant every user on this
+ * shared origin inherited whoever connected last — i.e. David's Strava leaked to
+ * the whole crew. Only the tokens are per-user; the app config (client id +
+ * Worker URL) is shared, since all athletes authorize the same Strava app.
+ */
+function tokKey(): string {
+  const u = resolveCrewUser();
+  return u ? `${TOK_KEY}.${u}` : TOK_KEY;
+}
+
+// One-time migration: re-home the legacy unscoped token under David's key (he is
+// the athlete who was meant to stay continuously connected) and drop the shared
+// key so other athletes no longer inherit it. Idempotent.
+let _migratedStrava = false;
+function migrateLegacyTokens(): void {
+  if (_migratedStrava) return;
+  _migratedStrava = true;
+  try {
+    const legacy = localStorage.getItem(TOK_KEY);
+    if (!legacy) return;
+    if (!localStorage.getItem(`${TOK_KEY}.david`)) localStorage.setItem(`${TOK_KEY}.david`, legacy);
+    localStorage.removeItem(TOK_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+migrateLegacyTokens();
 
 export interface StravaConfig {
   clientId: string;
@@ -63,7 +94,7 @@ export function isConfigured(c = loadConfig()): boolean {
 
 export function loadTokens(): StravaTokens | null {
   try {
-    const raw = localStorage.getItem(TOK_KEY);
+    const raw = localStorage.getItem(tokKey());
     if (raw) return JSON.parse(raw);
   } catch {
     /* ignore */
@@ -72,14 +103,14 @@ export function loadTokens(): StravaTokens | null {
 }
 function saveTokens(t: StravaTokens): void {
   try {
-    localStorage.setItem(TOK_KEY, JSON.stringify(t));
+    localStorage.setItem(tokKey(), JSON.stringify(t));
   } catch {
     /* ignore */
   }
 }
 export function disconnect(): void {
   try {
-    localStorage.removeItem(TOK_KEY);
+    localStorage.removeItem(tokKey());
   } catch {
     /* ignore */
   }
