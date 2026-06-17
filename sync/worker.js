@@ -66,6 +66,8 @@ const REVIEW_PER_OWNER = 30; // keep the newest N clips per athlete
 const MOVE_MAX = 40;
 const NOTE_MAX = 400;
 const FEEDBACK_MAX = 4000;
+const MSG_MAX = 1200;   // a single Q&A message
+const THREAD_MAX = 60;  // messages kept per clip (oldest dropped beyond this)
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 
 export default {
@@ -100,6 +102,7 @@ export default {
       if (url.pathname === "/review/item" && request.method === "GET") return await handleReviewItem(request, env, cors, url);
       if (url.pathname === "/review/clip" && request.method === "GET") return await handleReviewClip(request, env, cors, url);
       if (url.pathname === "/review/feedback" && request.method === "POST") return await handleReviewFeedback(request, env, cors);
+      if (url.pathname === "/review/message" && request.method === "POST") return await handleReviewMessage(request, env, cors);
       if (url.pathname === "/review/delete" && request.method === "POST") return await handleReviewDelete(request, env, cors);
       return json({ error: "not found" }, 404, cors);
     } catch (e) {
@@ -323,6 +326,8 @@ async function handleAdminActivity(request, env, cors, url) {
 const reviewMetaKey = (id) => REVIEW_PREFIX + id;
 const reviewBlobKey = (id) => "clip/" + id;
 function reviewSummary(meta) {
+  const thread = Array.isArray(meta.thread) ? meta.thread : [];
+  const last = thread.length ? thread[thread.length - 1] : null;
   return {
     owner: meta.owner,
     movement: meta.movement || "",
@@ -331,6 +336,11 @@ function reviewSummary(meta) {
     createdAt: meta.createdAt || 0,
     status: meta.status || "pending",
     hasFeedback: !!meta.feedback,
+    feedbackAt: (meta.feedback && meta.feedback.at) || 0,
+    threadN: thread.length,
+    // who spoke last in the Q&A thread — lets each side badge "needs my reply"
+    lastBy: last ? (last.role || "") : "",
+    lastAt: last ? last.at : 0,
   };
 }
 
@@ -445,6 +455,35 @@ async function handleReviewFeedback(request, env, cors) {
   await env.HISTORY.put(reviewMetaKey(id), JSON.stringify(meta), { metadata: reviewSummary(meta) });
   await appendActivity(env, meta.owner, [{ t: Date.now(), type: "review_feedback", detail: (meta.movement || "clip").slice(0, DETAIL_MAX) }]);
   return json({ ok: true }, 200, cors);
+}
+
+// Q&A thread on a clip: the athlete (owner) asks a follow-up about the form or
+// the marked-up video; the coach (admin) replies. Both can post; the other side
+// is notified (the coach via the queue badge keyed off lastBy, plus an activity
+// note). Returns the updated item so the caller can re-render the thread.
+async function handleReviewMessage(request, env, cors) {
+  const payload = await authedPayload(request, env);
+  if (!payload) return json({ error: "unauthorized" }, 401, cors);
+  const body = await readJson(request);
+  const id = String((body && body.id) || "");
+  if (!ID_RE.test(id)) return json({ error: "bad id" }, 400, cors);
+  const meta = await loadReviewMeta(env, id);
+  if (!meta) return json({ error: "not found" }, 404, cors);
+  const admin = isAdmin(payload);
+  if (meta.owner !== payload.u && !admin) return json({ error: "forbidden" }, 403, cors);
+  const text = typeof body.text === "string" ? body.text.trim().slice(0, MSG_MAX) : "";
+  if (!text) return json({ error: "empty message" }, 400, cors);
+  const role = admin ? "coach" : "athlete";
+  if (!Array.isArray(meta.thread)) meta.thread = [];
+  meta.thread.push({ by: payload.u, role, text, at: Date.now() });
+  if (meta.thread.length > THREAD_MAX) meta.thread = meta.thread.slice(-THREAD_MAX);
+  await env.HISTORY.put(reviewMetaKey(id), JSON.stringify(meta), { metadata: reviewSummary(meta) });
+  if (role === "athlete") {
+    for (const a of ADMIN) await appendActivity(env, a, [{ t: Date.now(), type: "review_question", detail: ((meta.owner || "") + " · " + (meta.movement || "clip")).slice(0, DETAIL_MAX) }]);
+  } else {
+    await appendActivity(env, meta.owner, [{ t: Date.now(), type: "review_reply", detail: (meta.movement || "clip").slice(0, DETAIL_MAX) }]);
+  }
+  return json({ ok: true, item: meta }, 200, cors);
 }
 
 async function handleReviewDelete(request, env, cors) {

@@ -70,9 +70,18 @@
     });
     return asJson(res);
   }
+  /** Post a Q&A message (athlete question or coach reply); returns updated item. */
+  async function message(id, text) {
+    var res = await fetch(workerUrl() + "/review/message", {
+      method: "POST",
+      headers: Object.assign({ "content-type": "application/json" }, auth()),
+      body: JSON.stringify({ id: id, text: text }),
+    });
+    return (await asJson(res)).item;
+  }
 
   window.RoxReview = {
     workerUrl: workerUrl, token: token, user: user, authed: authed,
-    upload: upload, list: list, item: item, clipBlobUrl: clipBlobUrl, feedback: feedback, remove: remove,
+    upload: upload, list: list, item: item, clipBlobUrl: clipBlobUrl, feedback: feedback, message: message, remove: remove,
   };
 })();
