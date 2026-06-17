@@ -96,3 +96,28 @@ export function prettyUser(u: string | null | undefined): string {
   if (!u) return "";
   return u.charAt(0).toUpperCase() + u.slice(1);
 }
+
+/**
+ * Each athlete's training-calendar page on the Hybrid Crew hub (filenames are
+ * relative to ../hybrid-crew/). Used for the "My Calendar" shortcut and to fetch
+ * a user's programmed workouts into RoxLive. Keep in sync with CREW_USERS — a
+ * user missing here just doesn't get the shortcut (handled gracefully).
+ */
+export const CALENDAR_PAGES: Partial<Record<CrewUser, string>> = {
+  david: "david-year-calendar.html",
+  carla: "jakarta-taper-competitive.html",
+  erika: "jakarta-taper-competitive.html",
+  liz: "jakarta-taper-firsttimers.html",
+  marianne: "jakarta-taper-firsttimers.html",
+  aleena: "jakarta-taper-mixed.html",
+  aura: "aura-training-calendar.html",
+  fayth: "fayths-training-plan.html",
+  "levelshyroxpt-sample": "levels-hyrox-2027-calendar.html",
+  "ommohyroxpc-sample": "ommo-hyrox-2027-calendar.html",
+};
+
+/** The calendar page file for a user, or null if they have none. */
+export function calendarPageFor(u: string | null | undefined): string | null {
+  if (!u) return null;
+  return (CALENDAR_PAGES as Record<string, string>)[u] || null;
+}

@@ -25,7 +25,9 @@ import { clonePlan, cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan
 import { VISION_MODELS } from "./lib/vision";
 import { VoiceCoach } from "./lib/voice";
 import { addToHistory, clearHistory, deleteFromHistory, loadHistory, pullAndMerge, updateHistory } from "./lib/history";
-import { resolveCrewUser, prettyUser } from "./lib/user";
+import { resolveCrewUser, prettyUser, calendarPageFor } from "./lib/user";
+import { takeIncoming, incomingToPlan, selfTestCalendarImport } from "./lib/calendarImport";
+import { CalendarPicker } from "./components/CalendarPicker";
 import {
   loadSyncConfig,
   saveSyncConfig,
@@ -85,6 +87,10 @@ export default function App() {
 
   // Signed-in Hybrid Crew athlete (same-origin hub) — scopes saved history.
   const crewUser = useMemo(() => resolveCrewUser(), []);
+  // The athlete's training-calendar page on the hub (for the "My Calendar"
+  // shortcut + the "From your calendar" workout picker), or null if they have none.
+  const calendarPage = useMemo(() => calendarPageFor(crewUser), [crewUser]);
+  const [calendarPickerOpen, setCalendarPickerOpen] = useState(false);
 
   // Workout history (persisted locally, per crew user when signed in).
   const [history, setHistory] = useState<SessionSummary[]>(() => loadHistory());
@@ -139,6 +145,9 @@ export default function App() {
       localStorage.removeItem("hcUser");
       sessionStorage.removeItem("hcUser");
       localStorage.removeItem("roxlive.user");
+      // Drop any mid-flight calendar handoff so it can't auto-import into the
+      // next (anonymous or different) athlete's session on this shared device.
+      localStorage.removeItem("roxlive.incoming.v1");
     } catch {
       /* ignore */
     }
@@ -478,7 +487,39 @@ export default function App() {
         const r = m.selfTestGait();
         console.log(`[gait selfTest] ${r.ok ? "PASS" : "FAIL"} — ${r.detail}`);
       });
+      const c = selfTestCalendarImport();
+      console.log(`[calendarImport selfTest] ${c.ok ? "PASS" : "FAIL"} — ${c.detail}`);
     }
+  }, []);
+
+  // A calendar page can hand us a workout: it writes the day's prescription to
+  // localStorage (roxlive.incoming.v1) and navigates here. Adopt it on load —
+  // armed and ready to START (we never auto-start; the athlete presses START).
+  useEffect(() => {
+    const inc = takeIncoming();
+    if (!inc) return;
+    try {
+      const p = incomingToPlan(inc);
+      setWorkoutType("workout");
+      setPlan(p);
+      savePlan(p);
+      setRaceMode("workout");
+      setBuilderOpen(false);
+      logActivity("calendar_import", p.title);
+    } catch (e) {
+      console.warn("[calendar] failed to import incoming workout", e);
+    }
+  }, []);
+
+  /** Pick a day from the athlete's calendar → adopt it, armed and ready to START. */
+  const adoptFromCalendar = useCallback((p: WorkoutPlan) => {
+    setCalendarPickerOpen(false);
+    setWorkoutType("workout");
+    setPlan(p);
+    savePlan(p);
+    setRaceMode("workout");
+    setBuilderOpen(false);
+    logActivity("calendar_import", p.title);
   }, []);
 
   // Current race segment derived from the elapsed schedule (pacing guide).
@@ -715,6 +756,9 @@ export default function App() {
         raceMode={raceMode}
         onSectionChange={handleSectionChange}
         onHub={crewUser ? () => { window.location.href = "../hybrid-crew/"; } : undefined}
+        onCalendar={calendarPage ? () => { setCalendarPickerOpen(true); logActivity("calendar_open"); } : undefined}
+        userName={crewUser ? prettyUser(crewUser) : undefined}
+        onLogout={crewUser ? handleLogout : undefined}
         onConnect={handleConnect}
         onDemo={handleDemo}
         onStop={handleStop}
@@ -864,6 +908,14 @@ export default function App() {
         onModelChange={persistModel}
         onSave={savePlanAndClose}
         onStart={adoptWorkout}
+        onOpenCalendar={calendarPage ? () => { setBuilderOpen(false); setCalendarPickerOpen(true); } : undefined}
+      />
+      <CalendarPicker
+        open={calendarPickerOpen}
+        pageFile={calendarPage}
+        userName={crewUser ? prettyUser(crewUser) : ""}
+        onClose={() => setCalendarPickerOpen(false)}
+        onPick={adoptFromCalendar}
       />
       <SettingsDrawer
         open={settingsOpen}

@@ -42,6 +42,7 @@ export function WorkoutBuilder({
   onModelChange,
   onSave,
   onStart,
+  onOpenCalendar,
 }: {
   open: boolean;
   onClose: () => void;
@@ -55,6 +56,8 @@ export function WorkoutBuilder({
   onModelChange: (m: string) => void;
   onSave: (plan: WorkoutPlan) => void;
   onStart: (plan: WorkoutPlan) => void;
+  /** present when the signed-in athlete has a training calendar — pull a day from it */
+  onOpenCalendar?: () => void;
 }) {
   const [draft, setDraft] = useState<WorkoutPlan>(() => initialPlan ?? emptyPlan());
   const [preview, setPreview] = useState<string | null>(null);
@@ -161,7 +164,17 @@ export function WorkoutBuilder({
                 <h2 className="font-[var(--font-display)] text-2xl font-bold">Today's Workout</h2>
                 <button onClick={onClose} className="btn-ghost w-8 h-8 grid place-items-center text-lg">×</button>
               </div>
-              <p className="text-[12px] text-[var(--color-ink-dim)] mb-5">Snap a photo of your plan, pick a sample, or build it by hand — then tune the voice coach and start.</p>
+              <p className="text-[12px] text-[var(--color-ink-dim)] mb-5">Pull today's session from your calendar, snap a photo of your plan, pick a sample, or build it by hand — then tune the voice coach and start.</p>
+
+              {onOpenCalendar && (
+                <button
+                  onClick={onOpenCalendar}
+                  className="btn-volt w-full h-11 mb-5 text-sm flex items-center justify-center gap-2"
+                  title="Load a workout straight from your Hybrid Crew training calendar"
+                >
+                  📅 From your training calendar
+                </button>
+              )}
 
               {/* ---- Photo import ---- */}
               <Section title="1 · Import from a photo">
