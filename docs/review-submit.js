@@ -19,7 +19,7 @@
   try { SESSION = (document.currentScript && document.currentScript.getAttribute("data-session")) || ""; } catch (e) {}
   if (!window.RoxReview) { console.warn("[review-submit] review-client.js not loaded"); return; }
 
-  var MAX_MB = 300;                 // per-clip cap (matches the worker's REVIEW_MAX_BYTES)
+  var MAX_MB = 1024;                // per-clip cap in MB (matches the worker's REVIEW_MAX_BYTES = 1 GB)
   var REC_BITRATE = 2500000;        // ~2.5 Mbps video → a 2-min clip ≈ 40 MB
   var REC_MAX_SEC = 180;            // hard ceiling so a forgotten recording can't balloon
 

@@ -61,7 +61,7 @@ const DETAIL_MAX = 160;
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 // Async video coaching (R2-backed review queue)
 const REVIEW_PREFIX = "review:"; // KV meta keys: review:<id>
-const REVIEW_MAX_BYTES = 300 * 1024 * 1024; // per-clip cap (room for a ~2-min clip)
+const REVIEW_MAX_BYTES = 1024 * 1024 * 1024; // per-clip cap (1 GB — ample for a 2-min clip)
 const REVIEW_PER_OWNER = 30; // keep the newest N clips per athlete
 const MOVE_MAX = 40;
 const NOTE_MAX = 400;
@@ -340,34 +340,27 @@ async function handleReviewUpload(request, env, cors, url) {
   if (!payload) return json({ error: "unauthorized" }, 401, cors);
   const owner = payload.u;
   const len = Number(request.headers.get("content-length") || 0);
-  if (len > REVIEW_MAX_BYTES) return json({ error: "clip too large (max 300 MB)" }, 413, cors);
+  if (len > REVIEW_MAX_BYTES) return json({ error: "clip too large (max 1 GB)" }, 413, cors);
   if (!request.body) return json({ error: "empty body" }, 400, cors);
   const movement = (url.searchParams.get("movement") || "").slice(0, MOVE_MAX);
   const session = (url.searchParams.get("session") || "").slice(0, 16);
   const note = (url.searchParams.get("note") || "").slice(0, NOTE_MAX);
   const ctype = request.headers.get("content-type") || "video/mp4";
   const id = bytesToB64url(crypto.getRandomValues(new Uint8Array(12)));
-  // Content-Length can be spoofed or omitted, so enforce the cap DURING
-  // ingestion: abort the stream the instant it exceeds the limit, so an
-  // oversized body is never fully stored (R2 has no server-side byte cap).
-  let seen = 0;
-  const limited = request.body.pipeThrough(
-    new TransformStream({
-      transform(chunk, ctrl) {
-        seen += chunk.byteLength;
-        if (seen > REVIEW_MAX_BYTES) { ctrl.error(new Error("clip too large")); return; }
-        ctrl.enqueue(chunk);
-      },
-    })
-  );
+  // Stream the body straight to R2. R2.put needs a KNOWN length, which the
+  // request's Content-Length supplies — so we hand it request.body directly.
+  // (Piping through a TransformStream strips the length and makes R2.put throw,
+  // which previously surfaced as a bogus "clip too large" for every clip.) The
+  // size cap is enforced from Content-Length above; R2 reads only up to the
+  // declared length, so a spoofed-small length can't store more than it claims.
   try {
-    await env.REVIEW.put(reviewBlobKey(id), limited, { httpMetadata: { contentType: ctype } });
+    await env.REVIEW.put(reviewBlobKey(id), request.body, { httpMetadata: { contentType: ctype } });
   } catch (e) {
     await env.REVIEW.delete(reviewBlobKey(id)).catch(() => {});
-    return json({ error: "clip too large (max 300 MB)" }, 413, cors);
+    return json({ error: "couldn’t store the clip — please retry (" + ((e && e.message) || "upload error") + ")" }, 500, cors);
   }
   const head = await env.REVIEW.head(reviewBlobKey(id));
-  const size = head ? head.size : seen;
+  const size = head ? head.size : len;
   const meta = { id, owner, movement, session, note, ctype, size, createdAt: Date.now(), status: "pending" };
   await env.HISTORY.put(reviewMetaKey(id), JSON.stringify(meta), { metadata: reviewSummary(meta) });
   await pruneOwnerClips(env, owner);
