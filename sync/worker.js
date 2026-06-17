@@ -61,7 +61,7 @@ const DETAIL_MAX = 160;
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 // Async video coaching (R2-backed review queue)
 const REVIEW_PREFIX = "review:"; // KV meta keys: review:<id>
-const REVIEW_MAX_BYTES = 150 * 1024 * 1024; // per-clip cap
+const REVIEW_MAX_BYTES = 300 * 1024 * 1024; // per-clip cap (room for a ~2-min clip)
 const REVIEW_PER_OWNER = 30; // keep the newest N clips per athlete
 const MOVE_MAX = 40;
 const NOTE_MAX = 400;
@@ -340,7 +340,7 @@ async function handleReviewUpload(request, env, cors, url) {
   if (!payload) return json({ error: "unauthorized" }, 401, cors);
   const owner = payload.u;
   const len = Number(request.headers.get("content-length") || 0);
-  if (len > REVIEW_MAX_BYTES) return json({ error: "clip too large (max 150 MB)" }, 413, cors);
+  if (len > REVIEW_MAX_BYTES) return json({ error: "clip too large (max 300 MB)" }, 413, cors);
   if (!request.body) return json({ error: "empty body" }, 400, cors);
   const movement = (url.searchParams.get("movement") || "").slice(0, MOVE_MAX);
   const session = (url.searchParams.get("session") || "").slice(0, 16);
@@ -364,7 +364,7 @@ async function handleReviewUpload(request, env, cors, url) {
     await env.REVIEW.put(reviewBlobKey(id), limited, { httpMetadata: { contentType: ctype } });
   } catch (e) {
     await env.REVIEW.delete(reviewBlobKey(id)).catch(() => {});
-    return json({ error: "clip too large (max 150 MB)" }, 413, cors);
+    return json({ error: "clip too large (max 300 MB)" }, 413, cors);
   }
   const head = await env.REVIEW.head(reviewBlobKey(id));
   const size = head ? head.size : seen;

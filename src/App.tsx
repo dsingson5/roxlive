@@ -522,6 +522,13 @@ export default function App() {
     logActivity("calendar_import", p.title);
   }, []);
 
+  // Expose the current workout's name to the injected "Send to coach" widget
+  // (review-submit.js) so its movement dropdown offers the loaded workout —
+  // mirrors how the strength pages list their own exercises.
+  useEffect(() => {
+    try { (window as unknown as { RXS_WORKOUTS?: string[] }).RXS_WORKOUTS = plan ? [plan.title] : undefined; } catch { /* ignore */ }
+  }, [plan]);
+
   // Current race segment derived from the elapsed schedule (pacing guide).
   const cum = useMemo(() => {
     const arr: number[] = [];
