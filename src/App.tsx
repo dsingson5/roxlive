@@ -27,6 +27,7 @@ import { VoiceCoach } from "./lib/voice";
 import { addToHistory, clearHistory, deleteFromHistory, loadHistory, pullAndMerge, updateHistory } from "./lib/history";
 import { resolveCrewUser, prettyUser, calendarPageFor } from "./lib/user";
 import { takeIncoming, incomingToPlan, selfTestCalendarImport } from "./lib/calendarImport";
+import { selfTestRepForm } from "./lib/repForm";
 import { CalendarPicker } from "./components/CalendarPicker";
 import {
   loadSyncConfig,
@@ -75,6 +76,7 @@ export default function App() {
   const [raceMode, setRaceMode] = useState<"free" | "hyrox" | "workout" | "squad">("free");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
+  const [formExercise, setFormExercise] = useState<string | null>(null);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   /** true when a summary is shown but NOT yet saved (a <10 s session pending keep/delete) */
   const [summaryUnsaved, setSummaryUnsaved] = useState(false);
@@ -489,6 +491,8 @@ export default function App() {
       });
       const c = selfTestCalendarImport();
       console.log(`[calendarImport selfTest] ${c.ok ? "PASS" : "FAIL"} — ${c.detail}`);
+      const rf = selfTestRepForm();
+      console.log(`[repForm selfTest] ${rf.ok ? "PASS" : "FAIL"} — ${rf.detail}`);
     }
   }, []);
 
@@ -520,6 +524,15 @@ export default function App() {
     setRaceMode("workout");
     setBuilderOpen(false);
     logActivity("calendar_import", p.title);
+  }, []);
+
+  // Deep link from a strength page: ?ex=<movement> opens Form Lab straight into
+  // the camera rep-counter / form-checker for that exercise.
+  useEffect(() => {
+    try {
+      const ex = new URLSearchParams(window.location.search).get("ex");
+      if (ex) { setFormExercise(ex); setFormOpen(true); logActivity("form_lab", ex); }
+    } catch { /* ignore */ }
   }, []);
 
   // Expose the current workout's name to the injected "Send to coach" widget
@@ -1019,7 +1032,7 @@ export default function App() {
       {/* Form Lab — camera-based cadence & running form (lazy-loaded). */}
       {formOpen && (
         <Suspense fallback={<div className="fixed inset-0 z-[60] grid place-items-center bg-[var(--color-bg)]"><div className="animate-spin w-8 h-8 border-2 border-[var(--color-volt)] border-t-transparent rounded-full" /></div>}>
-          <FormLab onClose={() => setFormOpen(false)} />
+          <FormLab onClose={() => setFormOpen(false)} initialExercise={formExercise} />
         </Suspense>
       )}
 
