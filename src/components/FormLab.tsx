@@ -14,6 +14,7 @@ import { GaitAnalyzer, POSE_EDGES, type GaitSnapshot, type Landmarks } from "../
 import { createPoseDetector, type PoseDetector, type PoseQuality } from "../lib/pose";
 import { Metronome } from "../lib/metronome";
 import { RepFormAnalyzer, type RepFormSnapshot, type SetReport, type FaultHit } from "../lib/repForm";
+import { addStrengthSet, loadStrengthSets, summarizeTrend, type StrengthSet } from "../lib/strengthHistory";
 import { EXERCISES, getExercise, matchExercise } from "../lib/exercises";
 
 type Source = "camera" | "upload";
@@ -297,7 +298,7 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ensureDetector, source, metroOn, targetSpm, loop, stopLoop, mode, exId]);
 
-  const stop = useCallback(() => {
+  const stop = useCallback(async () => {
     stopLoop();
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
@@ -311,7 +312,11 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
     if (mode === "strength") {
       const rpt = repRef.current?.report() ?? null;
       setRepReport(rpt);
-      if (rpt && rpt.reps > 0) speak(`Set complete. ${rpt.reps} reps.`);
+      if (rpt && rpt.reps > 0) {
+        speak(`Set complete. ${rpt.reps} reps.`);
+        // Persist before showing the summary so its trend strip includes this set.
+        await addStrengthSet(rpt);
+      }
     } else {
       const snap = gaitRef.current.snapshot();
       setSummary(snap.steps > 0 ? snap : null);
@@ -508,7 +513,7 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
           <div className="space-y-3">
             {mode === "strength" ? (
               status === "summary" ? (
-                <StrengthSummary r={repReport} exName={getExercise(exId)?.name ?? "Set"} onAgain={() => setStatus("idle")} />
+                <StrengthSummary r={repReport} exId={exId} exName={getExercise(exId)?.name ?? "Set"} onAgain={() => setStatus("idle")} />
               ) : (
                 <StrengthLive s={repSnap} running={running} exName={getExercise(exId)?.name ?? ""} note={getExercise(exId)?.note} />
               )
@@ -600,7 +605,14 @@ function StrengthLive({ s, running, exName, note }: { s: RepFormSnapshot | null;
   );
 }
 
-function StrengthSummary({ r, exName, onAgain }: { r: SetReport | null; exName: string; onAgain: () => void }) {
+function StrengthSummary({ r, exId, exName, onAgain }: { r: SetReport | null; exId: string; exName: string; onAgain: () => void }) {
+  const [hist, setHist] = useState<StrengthSet[]>([]);
+  useEffect(() => {
+    let alive = true;
+    // reload when a new set lands (r changes) so the just-finished set shows
+    loadStrengthSets(exId).then((s) => { if (alive) setHist(s); });
+    return () => { alive = false; };
+  }, [exId, r]);
   if (!r || r.reps === 0) {
     return (
       <>
@@ -648,11 +660,41 @@ function StrengthSummary({ r, exName, onAgain }: { r: SetReport | null; exName: 
         )}
       </div>
 
+      {hist.length > 1 && <StrengthTrend hist={hist} />}
+
       <button onClick={onAgain} className="btn-volt w-full h-11 text-sm font-semibold">New set</button>
       <div className="card p-3 text-[11px] text-[var(--color-ink-faint)] leading-relaxed">
         Coaching aid from a 2D camera — not a clinical measurement. Send the clip to your coach for a human review.
       </div>
     </>
+  );
+}
+
+/** Cross-session trend strip — best reps, avg clean %, recent sessions. */
+function StrengthTrend({ hist }: { hist: StrengthSet[] }) {
+  const t = summarizeTrend(hist);
+  const recent = hist.slice(0, 5); // newest first
+  const fmtDate = (ts: number) => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return (
+    <div className="card p-4">
+      <div className="card-title mb-2">{hist[0]?.exerciseName} · last {t.sessions} sessions</div>
+      <div className="flex gap-5 mb-3">
+        <div><div className="num text-2xl leading-none text-[var(--color-ink)]">{t.bestReps}</div><div className="text-[10px] text-[var(--color-ink-faint)] mt-0.5">best reps</div></div>
+        <div><div className="num text-2xl leading-none text-[var(--color-ink)]">{t.avgCleanPct}%</div><div className="text-[10px] text-[var(--color-ink-faint)] mt-0.5">avg clean</div></div>
+        {t.lastVelLossPct != null && <div><div className="num text-2xl leading-none text-[var(--color-ink)]">{t.lastVelLossPct}%</div><div className="text-[10px] text-[var(--color-ink-faint)] mt-0.5">last vel-loss</div></div>}
+      </div>
+      <div className="space-y-1">
+        {recent.map((s) => {
+          const cleanPct = s.reps > 0 ? Math.round((s.cleanReps / s.reps) * 100) : 0;
+          return (
+            <div key={s.id} className="flex items-center justify-between text-[12px]">
+              <span className="text-[var(--color-ink-faint)]">{fmtDate(s.ts)}</span>
+              <span className="num text-[var(--color-ink-dim)]">{s.reps} reps · {cleanPct}% clean{s.velLossPct != null ? ` · ${s.velLossPct}% loss` : ""}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

@@ -28,6 +28,7 @@ import { addToHistory, clearHistory, deleteFromHistory, loadHistory, pullAndMerg
 import { resolveCrewUser, prettyUser, calendarPageFor } from "./lib/user";
 import { takeIncoming, incomingToPlan, selfTestCalendarImport } from "./lib/calendarImport";
 import { selfTestRepForm } from "./lib/repForm";
+import { selfTestStrengthHistory } from "./lib/strengthHistory";
 import { getDeviceName, setDeviceName, defaultDeviceName, resolveDeviceLabel } from "./lib/deviceNames";
 import { CalendarPicker } from "./components/CalendarPicker";
 import {
@@ -544,6 +545,8 @@ export default function App() {
       console.log(`[calendarImport selfTest] ${c.ok ? "PASS" : "FAIL"} — ${c.detail}`);
       const rf = selfTestRepForm();
       console.log(`[repForm selfTest] ${rf.ok ? "PASS" : "FAIL"} — ${rf.detail}`);
+      const sh = selfTestStrengthHistory();
+      console.log(`[strengthHistory selfTest] ${sh.ok ? "PASS" : "FAIL"} — ${sh.detail}`);
     }
   }, []);
 
