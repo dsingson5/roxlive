@@ -622,6 +622,11 @@ function StrengthSummary({ r, exName, onAgain }: { r: SetReport | null; exName: 
           <div className="text-sm text-[var(--color-ink-faint)] mb-1">reps · {r.cleanReps}/{r.reps} clean</div>
         </div>
         {t && <div className="text-[11px] text-[var(--color-ink-faint)]">avg tempo {t[0]}-{t[1]}-{t[2]} (ecc·pause·con) · TUT ~{Math.round((t[0] + t[1] + t[2]) * r.reps)}s</div>}
+        {r.velLossPct != null && (
+          <div className="text-[11px] mt-1" style={{ color: r.velLossThreshold != null && r.velLossPct >= r.velLossThreshold ? "var(--color-amber)" : "var(--color-ink-faint)" }}>
+            bar-speed loss <b>{r.velLossPct}%</b>{r.velLossThreshold != null && r.velLossPct >= r.velLossThreshold ? " — past your fatigue cutoff; consider ending the set" : ""} <span className="opacity-70">· camera estimate, not a device</span>
+          </div>
+        )}
       </div>
 
       <div className="card p-4">

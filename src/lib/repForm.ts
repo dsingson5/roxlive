@@ -66,6 +66,9 @@ export interface Exercise {
   romLabel?: string;
   tempoPhases?: string[];
   formChecks: FormCheck[];
+  /** velocity-loss tracking: which body point's vertical travel proxies the bar,
+   *  and the loss % (vs the set's best rep) that flags meaningful fatigue. */
+  velocity?: { track: "hip" | "wrist"; lossThresholdPct: number };
   note?: string;
 }
 
@@ -148,6 +151,8 @@ export interface RepDetail {
   tempo: [number, number, number];
   tutSec: number;
   faults: FaultHit[];
+  /** mean concentric velocity (RELATIVE units/s — camera estimate, not m/s), or null. */
+  mcv: number | null;
 }
 export interface FaultHit {
   code: string;
@@ -176,6 +181,12 @@ export interface SetReport {
   /** mean [ecc, bottom, conc] across reps. */
   avgTempo: [number, number, number] | null;
   cleanReps: number;
+  /** per-rep mean concentric velocity (relative camera estimate). */
+  velCurve: number[];
+  /** velocity loss of the last rep vs the set's best rep, % (null if not tracked). */
+  velLossPct: number | null;
+  /** the exercise's loss threshold for flagging fatigue, % (null if not tracked). */
+  velLossThreshold: number | null;
 }
 
 type Phase = "top" | "descending" | "bottom" | "ascending";
@@ -187,6 +198,17 @@ function cmp(a: number, op: FormCheck["op"], b: number): boolean {
     case ">=": return a >= b;
     case "<=": return a <= b;
   }
+}
+
+/** Mid-y of the velocity track point (L/R hip or wrist), or null if not visible. */
+function trackPointY(lm: Landmarks, track: "hip" | "wrist"): number | null {
+  const a = lm[track === "hip" ? LM.L_HIP : L_WRIST];
+  const b = lm[track === "hip" ? LM.R_HIP : R_WRIST];
+  const va = !!a && (a.visibility ?? 0) >= VIS_MIN, vb = !!b && (b.visibility ?? 0) >= VIS_MIN;
+  if (va && vb) return (a!.y + b!.y) / 2;
+  if (va) return a!.y;
+  if (vb) return b!.y;
+  return null;
 }
 
 export class RepFormAnalyzer {
@@ -207,6 +229,8 @@ export class RepFormAnalyzer {
   private tBottom = 0;
   private tConcStart = 0;
   private sawBottom = false;
+  private trackY: number | null = null;   // current velocity track-point y
+  private concStartY: number | null = null; // track-point y at the start of the concentric
   /** only frontal-view checks run when filmed frontally, etc. */
   private filmedView: View;
 
@@ -229,6 +253,7 @@ export class RepFormAnalyzer {
     this.bottomMetrics = {};
     this.repMinPrimary = Infinity;
     this.sawBottom = false;
+    this.concStartY = null;
   }
   private accumulate(m: FrameMetrics): void {
     for (const k of Object.keys(m) as MetricKey[]) {
@@ -249,6 +274,7 @@ export class RepFormAnalyzer {
     if (raw == null) return; // signal joints not visible this frame
     const p = this.euro.filter(raw, tMs);
     this.primary = p;
+    if (this.ex.velocity) { const ty = trackPointY(lm, this.ex.velocity.track); if (ty != null) this.trackY = ty; }
     const { topEnter, bottomEnter } = this.ex;
 
     // accumulate per-rep extremes + remember the deepest (min-primary) frame
@@ -266,7 +292,7 @@ export class RepFormAnalyzer {
         else if (p >= topEnter) { this.phase = "top"; this.resetRep(); } // aborted partial — no rep, clear accumulators
         break;
       case "bottom":
-        if (p > bottomEnter) { this.phase = "ascending"; this.tConcStart = tMs; }
+        if (p > bottomEnter) { this.phase = "ascending"; this.tConcStart = tMs; this.concStartY = this.trackY; }
         break;
       case "ascending":
         if (p >= topEnter) { this.completeRep(tMs); this.phase = "top"; }
@@ -281,7 +307,12 @@ export class RepFormAnalyzer {
     const bot = Math.max(0, (this.tConcStart - this.tBottom) / 1000);
     const con = Math.max(0, (tTop - this.tConcStart) / 1000);
     const faults = this.evalChecks();
-    this.reps.push({ index: this.reps.length + 1, tempo: [ecc, bot, con], tutSec: ecc + bot + con, faults });
+    // mean concentric velocity: track-point vertical travel / concentric time
+    // (RELATIVE camera units — used only for the velocity-loss RATIO, never m/s).
+    const mcv = this.ex.velocity && this.concStartY != null && this.trackY != null && con > 0.05
+      ? +(Math.abs(this.trackY - this.concStartY) / con).toFixed(4)
+      : null;
+    this.reps.push({ index: this.reps.length + 1, tempo: [ecc, bot, con], tutSec: ecc + bot + con, faults, mcv });
   }
 
   private aggForCheck(c: FormCheck): number | undefined {
@@ -335,6 +366,13 @@ export class RepFormAnalyzer {
     const n = this.reps.length;
     let e = 0, b = 0, c = 0;
     for (const r of this.reps) { e += r.tempo[0]; b += r.tempo[1]; c += r.tempo[2]; }
+    const velCurve = this.reps.map((r) => r.mcv).filter((x): x is number => x != null && x > 0);
+    let velLossPct: number | null = null;
+    if (this.ex.velocity && velCurve.length >= 2) {
+      const ref = Math.max(...velCurve);
+      const last = velCurve[velCurve.length - 1];
+      if (ref > 0) velLossPct = Math.max(0, Math.round(((ref - last) / ref) * 100));
+    }
     return {
       exerciseId: this.ex.id,
       exerciseName: this.ex.name,
@@ -343,6 +381,9 @@ export class RepFormAnalyzer {
       faults: [...byCode.values()].sort((a, z) => z.reps - a.reps),
       avgTempo: n ? [+(e / n).toFixed(1), +(b / n).toFixed(1), +(c / n).toFixed(1)] : null,
       cleanReps: this.reps.filter((r) => r.faults.every((f) => f.severity === "info")).length,
+      velCurve,
+      velLossPct,
+      velLossThreshold: this.ex.velocity ? this.ex.velocity.lossThresholdPct : null,
     };
   }
 }

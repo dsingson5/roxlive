@@ -14,7 +14,7 @@ import type { Exercise } from "./repForm";
 
 export const EXERCISES: Exercise[] = [
   {
-    id: "back_squat", name: "Back Squat", view: "sagittal", primary: "kneeAngle", topEnter: 160, bottomEnter: 95,
+    id: "back_squat", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Back Squat", view: "sagittal", primary: "kneeAngle", topEnter: 160, bottomEnter: 95,
     romLabel: "depth (hips to knee height)", tempoPhases: ["eccentric", "bottom", "concentric"],
     note: "Film side-on for depth + trunk; front-on to check knees tracking over the toes.",
     formChecks: [
@@ -24,7 +24,7 @@ export const EXERCISES: Exercise[] = [
     ],
   },
   {
-    id: "front_squat", name: "Front Squat", view: "sagittal", primary: "kneeAngle", topEnter: 160, bottomEnter: 95,
+    id: "front_squat", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Front Squat", view: "sagittal", primary: "kneeAngle", topEnter: 160, bottomEnter: 95,
     romLabel: "depth (hips to knee height)", note: "Elbows high, stay upright — a front squat is meant to be more vertical than a back squat.",
     formChecks: [
       { code: "depth", metric: "depthHipKnee", at: "max", op: "<", value: 0, fault: "insufficient depth", cue: "Sit straight down — hit parallel", severity: "info", view: "sagittal" },
@@ -33,7 +33,7 @@ export const EXERCISES: Exercise[] = [
     ],
   },
   {
-    id: "goblet_squat", name: "Goblet Squat", view: "sagittal", primary: "kneeAngle", topEnter: 160, bottomEnter: 100,
+    id: "goblet_squat", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Goblet Squat", view: "sagittal", primary: "kneeAngle", topEnter: 160, bottomEnter: 100,
     romLabel: "depth", note: "Elbows inside the knees at the bottom.",
     formChecks: [
       { code: "depth", metric: "depthHipKnee", at: "max", op: "<", value: 0, fault: "insufficient depth", cue: "Sit deep — elbows to the knees", severity: "info", view: "sagittal" },
@@ -41,21 +41,21 @@ export const EXERCISES: Exercise[] = [
     ],
   },
   {
-    id: "conventional_deadlift", name: "Deadlift", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 75,
+    id: "conventional_deadlift", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Deadlift", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 75,
     romLabel: "lockout", note: "Film strictly side-on. 2D can't verify spine position — keep a flat, braced back; this counts reps + tempo, it doesn't grade your spine.",
     formChecks: [
       { code: "lockout", metric: "hipAngle", at: "max", op: "<", value: 165, fault: "soft lockout", cue: "Stand tall — squeeze the glutes at the top", severity: "info", view: "sagittal" },
     ],
   },
   {
-    id: "trap_bar_deadlift", name: "Trap-Bar Deadlift", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 80,
+    id: "trap_bar_deadlift", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Trap-Bar Deadlift", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 80,
     romLabel: "lockout", note: "Push the floor away, stand tall. Easier to keep upright than a barbell pull.",
     formChecks: [
       { code: "lockout", metric: "hipAngle", at: "max", op: "<", value: 165, fault: "soft lockout", cue: "Finish tall — hips through", severity: "info", view: "sagittal" },
     ],
   },
   {
-    id: "rdl", name: "Romanian Deadlift", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 95,
+    id: "rdl", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Romanian Deadlift", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 95,
     romLabel: "hinge depth", note: "Push the hips BACK, shins near vertical, minimal knee travel. Bar stays close. Neutral spine (2D can't verify — film side-on).",
     formChecks: [
       { code: "lockout", metric: "hipAngle", at: "max", op: "<", value: 165, fault: "soft lockout", cue: "Stand tall, squeeze glutes", severity: "info", view: "sagittal" },
@@ -70,7 +70,7 @@ export const EXERCISES: Exercise[] = [
     ],
   },
   {
-    id: "overhead_press", name: "Overhead Press", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 85,
+    id: "overhead_press", velocity: { track: "wrist", lossThresholdPct: 20 }, name: "Overhead Press", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 85,
     romLabel: "overhead lockout", note: "Press to full lockout, biceps by the ears; ribs down (no big back-lean).",
     formChecks: [
       { code: "lockout", metric: "elbowAngle", at: "max", op: "<", value: 165, fault: "didn't lock out overhead", cue: "Press all the way — finish with the elbows straight", severity: "info", view: "sagittal" },
@@ -78,14 +78,14 @@ export const EXERCISES: Exercise[] = [
     ],
   },
   {
-    id: "push_press", name: "Push Press", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 85,
+    id: "push_press", velocity: { track: "wrist", lossThresholdPct: 20 }, name: "Push Press", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 85,
     romLabel: "overhead lockout", note: "Dip-drive from the legs, then punch to full lockout overhead.",
     formChecks: [
       { code: "lockout", metric: "elbowAngle", at: "max", op: "<", value: 165, fault: "didn't lock out overhead", cue: "Punch to straight elbows overhead", severity: "info", view: "sagittal" },
     ],
   },
   {
-    id: "bench_press", name: "Bench / Floor Press", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 80,
+    id: "bench_press", velocity: { track: "wrist", lossThresholdPct: 20 }, name: "Bench / Floor Press", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 80,
     romLabel: "full lockout", note: "Touch the chest, press to full lockout. Film side-on; 5-point contact isn't checkable in 2D.",
     formChecks: [
       { code: "lockout", metric: "elbowAngle", at: "max", op: "<", value: 165, fault: "soft lockout", cue: "Press to straight arms", severity: "info", view: "sagittal" },
@@ -93,28 +93,28 @@ export const EXERCISES: Exercise[] = [
     ],
   },
   {
-    id: "bent_over_row", name: "Bent-Over Row", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 95,
+    id: "bent_over_row", velocity: { track: "wrist", lossThresholdPct: 20 }, name: "Bent-Over Row", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 95,
     romLabel: "pull to the ribs", note: "Freeze the hips — torso shouldn't rise with each pull. Full ROM, elbow past the torso.",
     formChecks: [
       { code: "rom_pull", metric: "elbowAngle", at: "min", op: ">", value: 80, fault: "short pull", cue: "Row all the way to the ribs", severity: "info", view: "sagittal" },
     ],
   },
   {
-    id: "pull_up", name: "Pull-Up", view: "either", primary: "elbowAngle", topEnter: 160, bottomEnter: 95,
+    id: "pull_up", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Pull-Up", view: "either", primary: "elbowAngle", topEnter: 160, bottomEnter: 95,
     romLabel: "chin over the bar", note: "Full hang at the bottom, chin over the bar at the top — no partial kipping. Side-on films the arm bend best.",
     formChecks: [
       { code: "rom_top", metric: "elbowAngle", at: "min", op: ">", value: 80, fault: "partial range", cue: "Pull the chin over the bar", severity: "info", view: "either" },
     ],
   },
   {
-    id: "kb_swing", name: "Kettlebell Swing", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 95,
+    id: "kb_swing", velocity: { track: "wrist", lossThresholdPct: 20 }, name: "Kettlebell Swing", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 95,
     romLabel: "hip snap", note: "Hinge — don't squat — and SNAP the hips to a tall finish (plank at the top), neutral spine.",
     formChecks: [
       { code: "lockout", metric: "hipAngle", at: "max", op: "<", value: 165, fault: "soft hip snap", cue: "Stand tall — squeeze the glutes hard at the top", severity: "info", view: "sagittal" },
     ],
   },
   {
-    id: "hip_thrust", name: "Hip Thrust", view: "sagittal", primary: "hipAngle", topEnter: 165, bottomEnter: 110,
+    id: "hip_thrust", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Hip Thrust", view: "sagittal", primary: "hipAngle", topEnter: 165, bottomEnter: 110,
     romLabel: "full hip extension", note: "Full extension at the top (shoulder-hip-knee straight), ribs down — don't hyperextend the low back.",
     formChecks: [
       { code: "extension", metric: "hipAngle", at: "max", op: "<", value: 168, fault: "under-extending at the top", cue: "Squeeze the glutes to full extension, ribs down", severity: "warn", view: "sagittal" },
