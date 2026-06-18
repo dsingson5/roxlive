@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GaitAnalyzer, POSE_EDGES, type GaitSnapshot, type Landmarks } from "../lib/gait";
-import { createPoseDetector, type PoseDetector, type PoseQuality } from "../lib/pose";
+import { createPoseDetector, createWorkerPoseDetector, canUseWorkerPose, type PoseDetector, type PoseQuality } from "../lib/pose";
 import { Metronome } from "../lib/metronome";
 import { RepFormAnalyzer, type RepFormSnapshot, type SetReport, type FaultHit } from "../lib/repForm";
 import { addStrengthSet, loadStrengthSets, summarizeTrend, type StrengthSet } from "../lib/strengthHistory";
@@ -62,6 +62,11 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
   const [repSnap, setRepSnap] = useState<RepFormSnapshot | null>(null);
   const [repReport, setRepReport] = useState<SetReport | null>(null);
   const [voiceOn, setVoiceOn] = useState(true);
+  // Stage 6 "smooth tracking": run pose inference in a Web Worker (off the main
+  // thread). Opt-in (default off) until validated on-device; ?smooth=1 enables.
+  const [smoothMode, setSmoothMode] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("smooth") === "1"; } catch { return false; }
+  });
   const voiceOnRef = useRef(voiceOn);
   useEffect(() => {
     voiceOnRef.current = voiceOn;
@@ -127,11 +132,21 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
     if (detRef.current) return detRef.current;
     setStatus("loading");
     setLoadingMsg("Loading the pose model (first time ~3–6s)…");
-    const d = await createPoseDetector(quality);
+    let d: PoseDetector | null = null;
+    if (smoothMode && canUseWorkerPose()) {
+      // Try the off-main-thread worker first; fall back to the proven
+      // main-thread detector on any init failure (older browser, blocked worker).
+      try {
+        d = await createWorkerPoseDetector(quality);
+      } catch {
+        d = null;
+      }
+    }
+    if (!d) d = await createPoseDetector(quality);
     detRef.current = d;
     setDelegate(d.delegate);
     return d;
-  }, [quality]);
+  }, [quality, smoothMode]);
 
   const drawSkeleton = useCallback((lm: Landmarks | null) => {
     const cv = canvasRef.current, video = videoRef.current;
@@ -505,6 +520,15 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
                     </button>
                   ))}
                 </div>
+                {canUseWorkerPose() && (
+                  <button
+                    onClick={() => { setSmoothMode((x) => !x); detRef.current?.close(); detRef.current = null; }}
+                    className="ml-auto btn-ghost h-6 px-2.5 text-[11px] flex items-center gap-1.5"
+                    style={smoothMode ? { borderColor: "var(--color-volt)", color: "var(--color-volt)" } : undefined}
+                    title="Run pose tracking in a background thread for a smoother feed (beta — falls back automatically if unsupported)">
+                    ⚡ Smooth {smoothMode ? "on" : "off"}
+                  </button>
+                )}
               </div>
             )}
           </div>

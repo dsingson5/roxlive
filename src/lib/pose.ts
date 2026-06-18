@@ -42,6 +42,68 @@ async function loadVision(): Promise<any> {
   return visionMod;
 }
 
+/** Is the worker-backed detector usable in this browser? */
+export function canUseWorkerPose(): boolean {
+  return typeof Worker !== "undefined" && typeof createImageBitmap === "function";
+}
+
+/**
+ * Worker-backed detector (Stage 6 "smooth tracking"). Implements the SAME
+ * synchronous PoseDetector.detect() contract — but instead of blocking on
+ * inference it dispatches the current frame to a Web Worker and returns the most
+ * recently completed landmarks (typically 1 frame stale). This keeps the
+ * existing render/analyze loop completely unchanged while moving the heavy
+ * MediaPipe work off the main thread. Throws if the worker can't initialize, so
+ * callers can fall back to createPoseDetector().
+ */
+export async function createWorkerPoseDetector(quality: PoseQuality = "full"): Promise<PoseDetector> {
+  // CLASSIC worker (not a module worker): MediaPipe's WASM glue calls
+  // importScripts() internally, which a module worker forbids. A classic worker
+  // still supports the dynamic import() we use to pull the vision ESM bundle.
+  const worker = new Worker(new URL("./poseWorker.ts", import.meta.url));
+  let latest: Landmarks | null = null;
+  let busy = false;
+  let delegate: "GPU" | "CPU" = "GPU";
+
+  // init handshake (with a timeout so a stuck worker doesn't hang Start forever)
+  await new Promise<void>((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error("pose worker init timeout")), 20000);
+    worker.onmessage = (ev: MessageEvent) => {
+      const m = ev.data;
+      if (m?.type === "ready") { delegate = m.delegate; clearTimeout(to); resolve(); }
+      else if (m?.type === "error") { clearTimeout(to); reject(new Error(m.message)); }
+    };
+    worker.onerror = (e) => { clearTimeout(to); reject(new Error(e.message || "pose worker error")); };
+    worker.postMessage({ type: "init", visionEsm: VISION_ESM, wasmBase: WASM_BASE, modelUrl: MODELS[quality] ?? MODELS.full });
+  });
+
+  // steady state: stash each result, free the worker for the next frame
+  worker.onmessage = (ev: MessageEvent) => {
+    const m = ev.data;
+    if (m?.type === "result") { latest = (m.landmarks as Landmarks | null) ?? null; busy = false; }
+  };
+  worker.onerror = () => { busy = false; }; // never wedge on a transient worker error
+
+  return {
+    delegate,
+    detect(video, tMs) {
+      // Non-blocking: if the worker is idle, ship the current frame; always
+      // return the last completed landmarks immediately (never block the UI).
+      if (!busy && video.readyState >= 2) {
+        busy = true;
+        const ts = tMs;
+        createImageBitmap(video)
+          .then((bmp) => worker.postMessage({ type: "frame", bitmap: bmp, ts }, [bmp]))
+          .catch(() => { busy = false; });
+      }
+      return latest;
+    },
+    close() {
+      try { worker.terminate(); } catch { /* ignore */ }
+    },
+  };
+}
+
 export async function createPoseDetector(quality: PoseQuality = "full"): Promise<PoseDetector> {
   const vision = await loadVision();
   const fileset = await vision.FilesetResolver.forVisionTasks(WASM_BASE);
