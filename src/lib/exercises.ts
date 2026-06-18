@@ -127,6 +127,66 @@ export const EXERCISES: Exercise[] = [
       { code: "knee_valgus", metric: "kneeValgusPct", at: "max", op: ">", value: 16, fault: "working knee caving", cue: "Track the knee over the foot", severity: "warn", view: "frontal", reliability: "low_2d" },
     ],
   },
+
+  /* --- Hyrox / functional ---
+   * Note: checks here deliberately test the BOTTOM extreme (depth) or a
+   * non-primary metric — both reliably captured. A "lockout at the top" check on
+   * the primary signal is omitted because a rep only counts once the primary
+   * reaches topEnter, so the top is unprovable from a completed rep; the `note`
+   * coaches the lockout instead. */
+  {
+    id: "thruster", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Thruster", view: "sagittal", primary: "kneeAngle", topEnter: 160, bottomEnter: 95,
+    romLabel: "squat depth + overhead lockout", note: "One movement: squat to parallel, then drive straight into a full overhead lockout (finish with straight elbows, biceps by the ears). Reps are counted off the squat.",
+    formChecks: [
+      { code: "depth", metric: "depthHipKnee", at: "max", op: "<", value: 0, fault: "insufficient squat depth", cue: "Hit parallel before you drive up", severity: "info", view: "sagittal" },
+    ],
+  },
+  {
+    id: "wall_ball", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Wall Ball", view: "sagittal", primary: "kneeAngle", topEnter: 160, bottomEnter: 100,
+    romLabel: "squat depth", note: "Reps counted off the squat. Hit depth, then stand and throw to the target — the throw/catch height isn't graded in 2D.",
+    formChecks: [
+      { code: "depth", metric: "depthHipKnee", at: "max", op: "<", value: 0, fault: "insufficient squat depth", cue: "Hit parallel each rep before the throw", severity: "info", view: "sagittal" },
+    ],
+  },
+  {
+    id: "power_clean", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Power Clean", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 80,
+    romLabel: "stand to full extension", note: "Film side-on. This counts the floor-to-stand cycle + tempo + bar-speed; 2D can't grade the bar path, catch or triple-extension timing — send a clip to your coach for technique.",
+    formChecks: [],
+  },
+  {
+    id: "power_snatch", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Power Snatch", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 80,
+    romLabel: "stand to full extension", note: "Film side-on. Counts the floor-to-stand cycle + tempo + bar-speed only; the overhead catch and bar path need a coach's eye, not a 2D camera.",
+    formChecks: [],
+  },
+  {
+    id: "good_morning", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Good Morning", view: "sagittal", primary: "hipAngle", topEnter: 160, bottomEnter: 105,
+    romLabel: "hinge depth", note: "Push the hips back, soft knees, flat braced back (2D can't verify the spine — film side-on). Drive the hips through to a tall finish each rep.",
+    formChecks: [],
+  },
+
+  /* --- Bodyweight / accessory --- */
+  {
+    id: "push_up", velocity: { track: "hip", lossThresholdPct: 20 }, name: "Push-Up", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 110,
+    romLabel: "chest to the floor", note: "Film side-on. Lower until the chest is near the floor and press to straight arms; keep a straight line from shoulders to heels — hips don't sag or pike.",
+    formChecks: [
+      { code: "rom_bottom", metric: "elbowAngle", at: "min", op: ">", value: 100, fault: "shallow depth", cue: "Lower until the chest is near the floor", severity: "info", view: "sagittal" },
+      { code: "hip_line", metric: "hipAngle", at: "min", op: "<", value: 155, fault: "hips out of line (sag or pike)", cue: "Squeeze the glutes — one straight line, shoulders to heels", severity: "warn", view: "sagittal" },
+    ],
+  },
+  {
+    id: "dip", velocity: { track: "wrist", lossThresholdPct: 20 }, name: "Dip", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 110,
+    romLabel: "depth", note: "Film side-on. Lower until the upper arms reach about parallel, then press to a full lockout. Don't dive deeper than your shoulders are comfortable with.",
+    formChecks: [
+      { code: "rom_bottom", metric: "elbowAngle", at: "min", op: ">", value: 100, fault: "shallow depth", cue: "Lower to about upper-arm parallel", severity: "info", view: "sagittal" },
+    ],
+  },
+  {
+    id: "bicep_curl", velocity: { track: "wrist", lossThresholdPct: 20 }, name: "Biceps Curl", view: "either", primary: "elbowAngle", topEnter: 140, bottomEnter: 80,
+    romLabel: "full curl", note: "Pin the elbows to your sides — no swinging or leaning back. Curl all the way up, lower to nearly straight each rep.",
+    formChecks: [
+      { code: "rom_top", metric: "elbowAngle", at: "min", op: ">", value: 70, fault: "didn't curl all the way", cue: "Squeeze the bar all the way to the top", severity: "info", view: "either" },
+    ],
+  },
 ];
 
 export const EXERCISE_BY_ID: Record<string, Exercise> = Object.fromEntries(EXERCISES.map((e) => [e.id, e]));
@@ -142,6 +202,13 @@ export function matchExercise(label: string | null | undefined): Exercise | null
   if (!t) return null;
   if (EXERCISE_BY_ID[t]) return EXERCISE_BY_ID[t];
   const has = (...w: string[]) => w.some((x) => t.includes(x));
+  // Specific compound/Olympic/Hyrox names first, before the generic "squat"/"press" catch-alls.
+  if (has("thruster")) return EXERCISE_BY_ID.thruster;
+  if (has("wall ball", "wallball", "wall-ball")) return EXERCISE_BY_ID.wall_ball;
+  if (has("snatch")) return EXERCISE_BY_ID.power_snatch;
+  if (has("jerk")) return EXERCISE_BY_ID.push_press; // clean & jerk → count the overhead drive
+  if (has("clean")) return EXERCISE_BY_ID.power_clean;
+  if (has("good morning", "good-morning")) return EXERCISE_BY_ID.good_morning;
   if (has("front squat")) return EXERCISE_BY_ID.front_squat;
   if (has("goblet")) return EXERCISE_BY_ID.goblet_squat;
   if (has("cossack")) return EXERCISE_BY_ID.cossack_squat;
@@ -151,12 +218,15 @@ export function matchExercise(label: string | null | undefined): Exercise | null
   if (has("deadlift", "pull from floor")) return EXERCISE_BY_ID.conventional_deadlift;
   if (has("lunge", "split squat", "rfe")) return EXERCISE_BY_ID.walking_lunge;
   if (has("push press")) return EXERCISE_BY_ID.push_press;
+  if (has("push-up", "push up", "pushup", "press-up", "press up")) return EXERCISE_BY_ID.push_up;
   if (has("overhead", "ohp", "shoulder press", "strict press", "military")) return EXERCISE_BY_ID.overhead_press;
   if (has("bench", "floor press")) return EXERCISE_BY_ID.bench_press;
   if (has("row")) return EXERCISE_BY_ID.bent_over_row;
   if (has("pull-up", "pull up", "pullup", "chin-up", "chin up")) return EXERCISE_BY_ID.pull_up;
   if (has("swing", "kettlebell", "kb swing")) return EXERCISE_BY_ID.kb_swing;
   if (has("hip thrust", "thrust", "bridge")) return EXERCISE_BY_ID.hip_thrust;
+  if (has("dip")) return EXERCISE_BY_ID.dip;
+  if (has("curl", "bicep", "biceps")) return EXERCISE_BY_ID.bicep_curl;
   if (has("press")) return EXERCISE_BY_ID.overhead_press;
   return null;
 }
