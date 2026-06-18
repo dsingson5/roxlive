@@ -28,6 +28,7 @@ import { addToHistory, clearHistory, deleteFromHistory, loadHistory, pullAndMerg
 import { resolveCrewUser, prettyUser, calendarPageFor } from "./lib/user";
 import { takeIncoming, incomingToPlan, selfTestCalendarImport } from "./lib/calendarImport";
 import { selfTestRepForm } from "./lib/repForm";
+import { getDeviceName, setDeviceName, defaultDeviceName, resolveDeviceLabel } from "./lib/deviceNames";
 import { CalendarPicker } from "./components/CalendarPicker";
 import {
   loadSyncConfig,
@@ -93,6 +94,56 @@ export default function App() {
   // shortcut + the "From your calendar" workout picker), or null if they have none.
   const calendarPage = useMemo(() => calendarPageFor(crewUser), [crewUser]);
   const [calendarPickerOpen, setCalendarPickerOpen] = useState(false);
+
+  // Friendly, remembered names for the connected HR sensor (default "<User>'s
+  // <Brand>" on first connect; editable from the device chip).
+  const [hrmNameTick, setHrmNameTick] = useState(0);
+  const deviceLabel = useMemo(
+    () => (eng.device ? resolveDeviceLabel(eng.device.id, eng.device.name) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [eng.device?.id, eng.device?.name, hrmNameTick]
+  );
+  useEffect(() => {
+    const d = eng.device;
+    if (d && d.status === "connected" && !d.simulated && d.id && !getDeviceName(d.id)) {
+      setDeviceName(d.id, defaultDeviceName(d.name, crewUser ? prettyUser(crewUser) : ""));
+      setHrmNameTick((t) => t + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eng.device?.id, eng.device?.status, crewUser]);
+  const renameDevice = useCallback(() => {
+    const d = eng.device;
+    if (!d || !d.id || d.simulated) return;
+    const cur = getDeviceName(d.id) || d.name;
+    const n = window.prompt("Name this heart-rate sensor", cur);
+    if (n != null) { setDeviceName(d.id, n.trim() || d.name); setHrmNameTick((t) => t + 1); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eng.device?.id]);
+
+  // Keep the screen awake while a sensor/session is live, so the device doesn't
+  // sleep and drop the Bluetooth HRM when the user switches apps/tabs/windows.
+  // (The BLE layer also auto-reconnects; this prevents the common screen-off drop.)
+  useEffect(() => {
+    if (eng.mode === "idle") return;
+    const nav = navigator as unknown as { wakeLock?: { request: (t: string) => Promise<{ release: () => Promise<void> }> } };
+    const wl = nav.wakeLock;
+    if (!wl) return;
+    let lock: { release: () => Promise<void> } | null = null;
+    let cancelled = false;
+    const acquire = async () => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      try { lock = await wl.request("screen"); } catch { /* unsupported/denied — fine */ }
+    };
+    const onVis = () => { if (document.visibilityState === "visible") acquire(); };
+    acquire();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      try { lock?.release(); } catch { /* ignore */ }
+      lock = null;
+    };
+  }, [eng.mode]);
 
   // Workout history (persisted locally, per crew user when signed in).
   const [history, setHistory] = useState<SessionSummary[]>(() => loadHistory());
@@ -666,6 +717,7 @@ export default function App() {
       hr: snap.hr,
       zoneColor,
       pctMax: snap.pctMax,
+      clock: fmtClock(snap.elapsedSec),
       line1,
       line2,
       status,
@@ -772,6 +824,8 @@ export default function App() {
       <TopBar
         snap={snap}
         device={eng.device}
+        deviceLabel={deviceLabel}
+        onRenameDevice={renameDevice}
         mode={eng.mode}
         raceMode={raceMode}
         onSectionChange={handleSectionChange}

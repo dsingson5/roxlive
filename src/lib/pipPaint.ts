@@ -17,6 +17,7 @@ export interface PipFrame {
   hr?: number | null;
   zoneColor?: string;
   pctMax?: number | null;
+  clock?: string; // elapsed session time (mm:ss)
   line1?: string; // interval name / status
   line2?: string; // countdown / target
   status?: string; // ON TARGET / etc.
@@ -62,6 +63,16 @@ export function paintFrame(ctx: CanvasRenderingContext2D, w: number, h: number, 
     ctx.fillStyle = color;
     ctx.font = "600 20px 'JetBrains Mono', monospace";
     ctx.fillText(`${Math.round(f.pctMax)}%`, 30 + hrW, h / 2 - 24);
+  }
+
+  // bottom-left: elapsed session time (always shown)
+  if (f.clock) {
+    ctx.fillStyle = DIM;
+    ctx.font = "600 13px 'Inter', system-ui, sans-serif";
+    ctx.fillText("TIME", 24, h - 46);
+    ctx.fillStyle = f.paused ? VOLT : INK;
+    ctx.font = "700 34px 'JetBrains Mono', monospace";
+    ctx.fillText(f.clock, 24, h - 14);
   }
 
   // right column: interval + countdown + status

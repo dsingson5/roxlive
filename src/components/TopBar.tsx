@@ -21,12 +21,18 @@ export function TopBar({
   onCalendar,
   userName,
   onLogout,
+  deviceLabel,
+  onRenameDevice,
   pipActive,
   pipSupported,
   supported,
 }: {
   snap: MetricsSnapshot;
   device: DeviceInfo | null;
+  /** friendly remembered name for the connected sensor (overrides device.name) */
+  deviceLabel?: string | null;
+  /** rename the connected sensor */
+  onRenameDevice?: () => void;
   mode: SourceMode;
   raceMode: "free" | "hyrox" | "workout" | "squad";
   onSectionChange: (s: "workout" | "squad") => void;
@@ -92,7 +98,7 @@ export function TopBar({
         <div className="flex-1" />
 
         {/* device chip */}
-        {device && <DeviceChip device={device} />}
+        {device && <DeviceChip device={device} label={deviceLabel} onRename={onRenameDevice} />}
 
         {/* actions */}
         <div className="flex items-center gap-2">
@@ -193,7 +199,7 @@ function ModeBtn({ active, onClick, children }: { active: boolean; onClick: () =
   );
 }
 
-function DeviceChip({ device }: { device: DeviceInfo }) {
+function DeviceChip({ device, label, onRename }: { device: DeviceInfo; label?: string | null; onRename?: () => void }) {
   const colorMap: Record<string, string> = {
     connected: "var(--color-mint)",
     connecting: "var(--color-amber)",
@@ -201,6 +207,8 @@ function DeviceChip({ device }: { device: DeviceInfo }) {
     disconnected: "var(--color-ink-faint)",
   };
   const c = colorMap[device.status];
+  const name = label || device.name;
+  const canRename = !!onRename && !device.simulated;
   return (
     <div
       className="hidden sm:flex items-center gap-2 px-3 h-9 rounded-xl bg-white/[0.03] border"
@@ -208,8 +216,12 @@ function DeviceChip({ device }: { device: DeviceInfo }) {
     >
       <span className="w-2 h-2 rounded-full" style={{ background: c, boxShadow: `0 0 8px ${c}` }} />
       <div className="leading-none">
-        <div className="text-[11px] font-semibold text-[var(--color-ink)] max-w-[140px] truncate flex items-center gap-1.5">
-          {device.name}
+        <div className="text-[11px] font-semibold text-[var(--color-ink)] max-w-[160px] truncate flex items-center gap-1.5">
+          {canRename ? (
+            <button onClick={onRename} className="truncate hover:text-[var(--color-volt)] transition-colors" title="Rename this sensor">{name} ✎</button>
+          ) : (
+            name
+          )}
           {device.simulated && (
             <span className="text-[8px] tracking-wider px-1 py-0.5 rounded" style={{ color: "var(--color-cyan)", background: "rgba(56,225,255,0.12)" }}>SIM</span>
           )}
