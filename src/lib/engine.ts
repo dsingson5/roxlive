@@ -28,7 +28,10 @@ import { zoneBounds, zoneForHr, pctMax } from "./zones";
 const RR_WINDOW_SEC = 120; // DFA / HRV / respiration rolling window
 const HEAVY_MS = 1500; // throttle for heavy metrics
 const SERIES_MS = 1000; // 1 Hz history cadence
-const MAX_SERIES = 60 * 90; // 90 min @ 1 Hz
+const MAX_SERIES = 60 * 60 * 4; // 4 h @ 1 Hz — long rides/bricks keep their FULL trace
+//   (the old 90-min cap silently dropped the opening minutes of longer sessions,
+//    which truncated the exported .FIT and made Strava read a too-short duration).
+//   The live chart only renders a rolling window, so a larger buffer is cheap.
 
 interface Stamped {
   t: number;

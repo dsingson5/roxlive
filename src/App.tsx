@@ -1358,8 +1358,27 @@ function buildSummary(
   const alphas = series.map((p) => p.alpha1).filter((v): v is number => v != null);
   const brs = series.map((p) => p.brpm).filter((v): v is number => v != null);
 
-  // downsample ~1 point / 5s
-  const ds: SeriesPoint[] = series.filter((_, i) => i % 5 === 0);
+  // Downsample the stored trace: ~1 pt/5s for normal sessions, but widen the
+  // stride for long rides so the saved series stays bounded (~1000 points max).
+  // History syncs up to 50 sessions in ONE PUT, so an unbounded per-session
+  // series would push the body past the sync Worker's cap and silently break
+  // cross-device sync. Floats are rounded to the precision the chart + .FIT
+  // actually use, shrinking each point well over 2×.
+  const TARGET_PTS = 1000;
+  const stride = Math.max(5, Math.ceil(series.length / TARGET_PTS));
+  const round = (v: number | null | undefined, d: number): number | null =>
+    v == null ? null : +v.toFixed(d);
+  const ds: SeriesPoint[] = series
+    .filter((_, i) => i % stride === 0)
+    .map((p) => ({
+      t: Math.round(p.t),
+      hr: p.hr,
+      alpha1: round(p.alpha1, 3),
+      speedMps: round(p.speedMps, 3),
+      brpm: round(p.brpm, 1),
+      zone: p.zone,
+      cadence: p.cadence,
+    }));
 
   const segArr =
     raceMode === "hyrox"

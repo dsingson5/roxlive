@@ -258,12 +258,17 @@ export async function pullHistory(user: string | null): Promise<RemoteHistory | 
 async function putHistory(user: string, sessions: SessionSummary[], tombstones: Tombstones): Promise<void> {
   const c = loadSyncConfig();
   if (!isSyncConfigured(c) || sessionUser() !== user) return;
-  await fetch(endpoint(c.url, user), {
+  const res = await fetch(endpoint(c.url, user), {
     method: "PUT",
     headers: { ...authHeaders(), "content-type": "application/json" },
     body: JSON.stringify({ sessions: sessions.slice(0, MAX), tombstones }),
     keepalive: true, // let a push begun on unload still complete
   });
+  // Surface a rejected push (esp. 413 = payload over the Worker's body cap) so a
+  // silently-broken sync is at least diagnosable — local stays authoritative.
+  if (!res.ok) {
+    console.warn(`[sync] history push failed: HTTP ${res.status}${res.status === 413 ? " (payload too large)" : ""}`);
+  }
 }
 
 interface PendingPush {

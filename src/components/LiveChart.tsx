@@ -30,7 +30,7 @@ export function LiveChart({
   windowSec?: number;
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
-  const [show, setShow] = useState<Record<Metric, boolean>>({ hr: true, alpha1: true, brpm: false });
+  const [show, setShow] = useState<Record<Metric, boolean>>({ hr: true, alpha1: true, brpm: true });
   const height = 280;
   const padL = 38;
   const padR = 40;

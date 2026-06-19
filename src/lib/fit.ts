@@ -152,13 +152,23 @@ const ACTIVITY: FieldDef[] = [
   { num: 4, base: "enum" }, // event_type: 1 = stop
 ];
 
+// respiration_rate (global message 297) — breaths/min × 100. Read by Garmin
+// Connect / intervals.icu (Strava ignores it). Self-describing, so any parser
+// that doesn't recognize it simply skips this message.
+const RESP: FieldDef[] = [
+  { num: 253, base: "u32" }, // timestamp
+  { num: 0, base: "u16" }, // respiration_rate (brpm * 100)
+];
+
 /* ---------------- encoder ---------------- */
 
 export function encodeFitActivity(summary: SessionSummary, series: SeriesPoint[]): Uint8Array {
   const body = new Buf();
-  const startFit = toFit(summary.startedAt);
-  const endFit = Math.max(startFit + 1, toFit(summary.endedAt));
+  const startMs = summary.startedAt;
   const elapsedMs = Math.max(1000, Math.round(summary.durationSec * 1000));
+  const endMs = startMs + elapsedMs; // authoritative end = start + RoxLive's own duration
+  const startFit = toFit(startMs);
+  const endFit = Math.max(startFit + 1, toFit(endMs));
 
   // file_id — activity created by a "development" device
   writeDef(body, 0, 0, FILE_ID);
@@ -168,27 +178,52 @@ export function encodeFitActivity(summary: SessionSummary, series: SeriesPoint[]
   writeDef(body, 1, 21, EVENT);
   writeData(body, 1, EVENT, [startFit, 0, 0]);
 
-  // record stream
+  // record stream — RESAMPLED to a gap-free grid spanning the WHOLE session
+  // window [start, start+duration]. This makes Strava's elapsed/moving time equal
+  // RoxLive's own durationSec exactly, regardless of (a) HR dropouts — the old
+  // code skipped null-HR points, leaving gaps Strava auto-paused on — or (b) a
+  // truncated history buffer that dropped a long ride's opening minutes. HR /
+  // speed / cadence are carried forward from the most recent prior sample.
   writeDef(body, 2, 20, RECORD);
+  const pts = series.filter((p) => p.t >= startMs - 2000 && p.t <= endMs + 2000).sort((a, b) => a.t - b.t);
+  const totalSec = Math.round(elapsedMs / 1000);
+  const stepSec = Math.max(1, Math.ceil(totalSec / 36000)); // bound the record count (~10 h @ 1 Hz)
   let dist = 0;
-  let lastT: number | null = null;
+  let pi = 0;
   let recordCount = 0;
-  for (const p of series) {
-    if (p.hr == null) {
-      lastT = p.t;
-      continue;
+  let curHr: number | null = null;
+  let curSpeed: number | null = null;
+  let curCad: number | null = null;
+  for (let sec = 0; sec <= totalSec; sec += stepSec) {
+    const t = startMs + sec * 1000;
+    while (pi < pts.length && pts[pi].t <= t) {
+      const p = pts[pi];
+      if (p.hr != null) curHr = p.hr;
+      if (p.speedMps != null) curSpeed = p.speedMps;
+      if (p.cadence != null) curCad = p.cadence;
+      pi++;
     }
-    const dt = lastT != null ? Math.min(10, Math.max(0, (p.t - lastT) / 1000)) : 0;
-    if (p.speedMps != null) dist += p.speedMps * dt;
-    lastT = p.t;
-    writeData(body, 2, RECORD, [
-      toFit(p.t),
-      p.hr,
-      p.cadence,
-      dist * 100,
-      p.speedMps != null ? p.speedMps * 1000 : null,
-    ]);
+    if (curSpeed != null) dist += curSpeed * stepSec;
+    writeData(body, 2, RECORD, [toFit(t), curHr, curCad, dist * 100, curSpeed != null ? curSpeed * 1000 : null]);
     recordCount++;
+  }
+
+  // respiration_rate stream (breaths/min) — captured from the HRM's R-R intervals
+  // (RSA). Throttled to ~0.2 Hz; carried forward; skipped while unavailable.
+  writeDef(body, 6, 297, RESP);
+  let ri = 0;
+  let rCur: number | null = null;
+  let lastResp = -Infinity;
+  for (let sec = 0; sec <= totalSec; sec += stepSec) {
+    const t = startMs + sec * 1000;
+    while (ri < pts.length && pts[ri].t <= t) {
+      if (pts[ri].brpm != null) rCur = pts[ri].brpm;
+      ri++;
+    }
+    if (rCur != null && rCur > 0 && t - lastResp >= 5000) {
+      lastResp = t;
+      writeData(body, 6, RESP, [toFit(t), Math.round(rCur * 100)]);
+    }
   }
 
   // timer stop
