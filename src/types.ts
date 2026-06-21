@@ -103,7 +103,10 @@ export type IntervalState = "idle" | "work" | "rest";
 
 export interface MetricsSnapshot {
   t: number;
+  /** wall-clock seconds since start (includes paused spans). */
   elapsedSec: number;
+  /** seconds actually recording — excludes paused spans (basis for Strava). */
+  activeSec: number;
 
   hr: number | null;
   hrAvg: number | null;
@@ -311,7 +314,11 @@ export interface SessionSummary {
   id: string;
   startedAt: number;
   endedAt: number;
+  /** wall-clock duration, start→stop (includes paused time). */
   durationSec: number;
+  /** active (moving) duration excluding pauses — what we post to Strava. Optional
+   *  for back-compat with sessions saved before active-time tracking. */
+  activeSec?: number;
   mode: "free" | "hyrox" | "workout";
   /** session modality classification (single sport, or "mixed") */
   modality?: import("./lib/modality").Modality;

@@ -17,7 +17,8 @@ export interface PipFrame {
   hr?: number | null;
   zoneColor?: string;
   pctMax?: number | null;
-  clock?: string; // elapsed session time (mm:ss)
+  activeClock?: string; // active (moving) time — freezes while paused (mm:ss)
+  clock?: string; // elapsed wall-clock time (mm:ss)
   line1?: string; // interval name / status
   line2?: string; // countdown / target
   status?: string; // ON TARGET / etc.
@@ -65,14 +66,22 @@ export function paintFrame(ctx: CanvasRenderingContext2D, w: number, h: number, 
     ctx.fillText(`${Math.round(f.pctMax)}%`, 30 + hrW, h / 2 - 24);
   }
 
-  // bottom-left: elapsed session time (always shown)
-  if (f.clock) {
+  // bottom-left: ACTIVE (moving) time — the headline clock, freezes while paused.
+  // ELAPSED (wall clock) shows just above it only once they diverge (after a
+  // pause), so an un-paused session stays uncluttered.
+  const primary = f.activeClock ?? f.clock;
+  if (primary) {
+    if (f.activeClock && f.clock && f.clock !== f.activeClock) {
+      ctx.fillStyle = FAINT;
+      ctx.font = "600 12px 'JetBrains Mono', monospace";
+      ctx.fillText(`ELAPSED ${f.clock}`, 24, h - 50);
+    }
     ctx.fillStyle = DIM;
     ctx.font = "600 13px 'Inter', system-ui, sans-serif";
-    ctx.fillText("TIME", 24, h - 46);
+    ctx.fillText(f.activeClock ? "ACTIVE" : "TIME", 24, h - 36);
     ctx.fillStyle = f.paused ? VOLT : INK;
-    ctx.font = "700 34px 'JetBrains Mono', monospace";
-    ctx.fillText(f.clock, 24, h - 14);
+    ctx.font = "700 32px 'JetBrains Mono', monospace";
+    ctx.fillText(primary, 24, h - 8);
   }
 
   // right column: interval + countdown + status

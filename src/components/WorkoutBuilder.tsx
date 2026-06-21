@@ -283,7 +283,19 @@ export function WorkoutBuilder({
                     />
                   ))}
                 </div>
-                <button onClick={() => setDraft((d) => ({ ...d, intervals: [...d.intervals, newInterval()] }))} className="btn-ghost w-full h-9 mt-2 text-[13px]">+ Add interval</button>
+                <div className="flex gap-2 mt-2">
+                  <button onClick={() => setDraft((d) => ({ ...d, intervals: [...d.intervals, newInterval()] }))} className="btn-ghost flex-1 h-9 text-[13px]">+ Add interval</button>
+                  {draft.intervals.length > 0 && (
+                    <button
+                      onClick={() => { if (window.confirm("Clear all intervals and start this workout from scratch?")) setDraft((d) => ({ ...d, intervals: [] })); }}
+                      className="btn-ghost px-4 h-9 text-[13px]"
+                      style={{ color: "var(--color-red)" }}
+                      title="Remove every interval so you can rebuild or swap the whole workout"
+                    >
+                      Clear all
+                    </button>
+                  )}
+                </div>
               </Section>
 
               {/* ---- Voice ---- */}

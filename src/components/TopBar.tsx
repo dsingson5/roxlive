@@ -13,6 +13,8 @@ export function TopBar({
   onConnect,
   onDemo,
   onStop,
+  onPause,
+  paused,
   onSettings,
   onHistory,
   onForm,
@@ -41,6 +43,9 @@ export function TopBar({
   onConnect: () => void;
   onDemo: () => void;
   onStop: () => void;
+  /** pause/resume the live session (solo modes); absent → no pause button */
+  onPause?: () => void;
+  paused?: boolean;
   onSettings: () => void;
   onHistory: () => void;
   /** open the camera-based running form analyzer */
@@ -85,13 +90,19 @@ export function TopBar({
           <ModeBtn active={raceMode === "squad"} onClick={() => onSectionChange("squad")}>Squad</ModeBtn>
         </div>
 
-        {/* session clock (solo modes only) */}
+        {/* session clock (solo modes only) — ACTIVE time (freezes while paused),
+            with wall-clock ELAPSED shown small once they diverge after a pause. */}
         {raceMode !== "squad" && (
           <div className="flex items-center gap-2 ml-1">
-            {live && <span className="live-dot w-2 h-2 rounded-full bg-[var(--color-red)]" />}
-            <span className="num text-xl tabular-nums" style={{ color: live ? "var(--color-ink)" : "var(--color-ink-faint)" }}>
-              {fmtClock(snap.elapsedSec)}
+            {live && <span className="live-dot w-2 h-2 rounded-full" style={{ background: paused ? "var(--color-volt)" : "var(--color-red)" }} />}
+            <span className="num text-xl tabular-nums" style={{ color: paused ? "var(--color-volt)" : live ? "var(--color-ink)" : "var(--color-ink-faint)" }}>
+              {fmtClock(snap.activeSec)}
             </span>
+            {live && Math.round(snap.elapsedSec) !== Math.round(snap.activeSec) && (
+              <span className="num text-[11px] tabular-nums text-[var(--color-ink-faint)] hidden sm:inline" title="Total elapsed (including paused time)">
+                / {fmtClock(snap.elapsedSec)}
+              </span>
+            )}
           </div>
         )}
 
@@ -116,9 +127,21 @@ export function TopBar({
               </button>
             </>
           ) : (
-            <button onClick={onStop} className="btn-ghost px-4 h-9 text-sm flex items-center gap-1.5" style={{ borderColor: "rgba(255,77,77,0.4)", color: "var(--color-red)" }}>
-              <StopIcon /> Stop
-            </button>
+            <>
+              {onPause && (
+                <button
+                  onClick={onPause}
+                  className="btn-ghost px-4 h-9 text-sm flex items-center gap-1.5"
+                  style={paused ? { borderColor: "var(--color-volt)", color: "var(--color-volt)" } : undefined}
+                  title={paused ? "Resume — restart the active timer" : "Pause — freeze the active timer (HR keeps reading)"}
+                >
+                  {paused ? "▶ Resume" : "❚❚ Pause"}
+                </button>
+              )}
+              <button onClick={onStop} className="btn-ghost px-4 h-9 text-sm flex items-center gap-1.5" style={{ borderColor: "rgba(255,77,77,0.4)", color: "var(--color-red)" }}>
+                <StopIcon /> Stop
+              </button>
+            </>
           )}
           {pipSupported && (
             <button

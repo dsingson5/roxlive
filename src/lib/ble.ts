@@ -25,6 +25,28 @@ export function bluetoothSupported(): boolean {
   return typeof navigator !== "undefined" && "bluetooth" in navigator;
 }
 
+/** iPhone/iPad — including iPadOS 13+ which reports a Mac UA but is touch. */
+export function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const iDevice = /iPad|iPhone|iPod/.test(ua);
+  const iPadOS = /Macintosh/.test(ua) && typeof document !== "undefined" && "ontouchend" in document;
+  return iDevice || iPadOS;
+}
+
+/**
+ * Why pairing isn't available, tailored to the platform. On iOS NO browser
+ * (Safari, Chrome, Edge — all WebKit) implements Web Bluetooth, so the honest
+ * fix is to point the athlete at a Web-Bluetooth-capable browser (Bluefy) or
+ * Demo mode rather than tell them to "use Chrome".
+ */
+export function bluetoothUnavailableMessage(): string {
+  if (isIOS()) {
+    return "iPhone & iPad browsers can't pair Bluetooth sensors — Apple doesn't support Web Bluetooth in Safari or iOS Chrome. To use your HRM on iOS, open RoxLive in the free “Bluefy” browser (App Store), or tap Demo to explore without a sensor.";
+  }
+  return "Web Bluetooth isn't available in this browser. Use Chrome or Edge on desktop or Android, then reload.";
+}
+
 type SampleCb = (s: HRSample) => void;
 type DeviceCb = (d: DeviceInfo) => void;
 type ErrCb = (msg: string) => void;
@@ -51,7 +73,7 @@ export class HeartRateBLE {
 
   async connect(): Promise<void> {
     if (!bluetoothSupported()) {
-      this.onError("Web Bluetooth isn't available in this browser. Use Chrome or Edge on desktop/Android.");
+      this.onError(bluetoothUnavailableMessage());
       return;
     }
     this.manualDisconnect = false;

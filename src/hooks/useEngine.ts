@@ -10,7 +10,7 @@ import type {
 import { DEFAULT_PROFILE } from "../types";
 import { MetricsEngine } from "../lib/engine";
 import { RaceSimulator } from "../lib/simulator";
-import { HeartRateBLE, bluetoothSupported } from "../lib/ble";
+import { HeartRateBLE, bluetoothSupported, bluetoothUnavailableMessage } from "../lib/ble";
 import { zoneBounds } from "../lib/zones";
 
 export type SourceMode = "idle" | "demo" | "live";
@@ -20,6 +20,7 @@ const now = () => performance.timeOrigin + performance.now();
 const emptySnapshot = (profile: AthleteProfile): MetricsSnapshot => ({
   t: now(),
   elapsedSec: 0,
+  activeSec: 0,
   hr: null,
   hrAvg: null,
   hrMax: null,
@@ -121,6 +122,11 @@ export function useEngine() {
     }
   }, []);
 
+  // App-level pause/resume — freezes active time + the recorded trace while the
+  // sensor keeps streaming HR for the live display.
+  const pause = useCallback(() => engineRef.current.pause(), []);
+  const resume = useCallback(() => engineRef.current.resume(), []);
+
   const onHR = useCallback((s: HRSample) => engineRef.current.ingestHR(s), []);
   const onPace = useCallback((s: PaceSample) => engineRef.current.ingestPace(s), []);
   const onCadence = useCallback((t: number, spm: number) => engineRef.current.ingestCadence(t, spm), []);
@@ -157,7 +163,7 @@ export function useEngine() {
   const connect = useCallback(async () => {
     setError(null);
     if (!bluetoothSupported()) {
-      setError("Web Bluetooth isn't available here. Use Chrome or Edge on desktop or Android, then reload.");
+      setError(bluetoothUnavailableMessage());
       return;
     }
     engineRef.current.reset();
@@ -264,6 +270,8 @@ export function useEngine() {
     startDemo,
     connect,
     stop,
+    pause,
+    resume,
     reset,
     restartSession,
     simRef,

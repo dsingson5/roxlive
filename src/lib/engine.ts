@@ -55,6 +55,8 @@ export class MetricsEngine {
   private startT = 0;
   private lastTick = 0;
   private running = false;
+  private paused = false; // app-level pause: HR keeps reading, but active time / trace freeze
+  private activeSec = 0; // time actually recording (excludes paused spans) — used for Strava
 
   private hrSum = 0;
   private hrCount = 0;
@@ -101,8 +103,20 @@ export class MetricsEngine {
     this.running = false;
   }
 
+  /** App-level pause: keep ingesting HR (live display) but freeze active time,
+   *  the recorded trace, distance/kcal/zone — so they reflect work, not rest. */
+  pause() {
+    this.paused = true;
+  }
+  resume() {
+    this.paused = false;
+  }
+
   isRunning() {
     return this.running;
+  }
+  isPaused() {
+    return this.paused;
   }
 
   reset() {
@@ -117,6 +131,8 @@ export class MetricsEngine {
     this.startT = 0;
     this.lastTick = 0;
     this.running = false;
+    this.paused = false;
+    this.activeSec = 0;
     this.hrSum = 0;
     this.hrCount = 0;
     this.hrMax = 0;
@@ -136,7 +152,8 @@ export class MetricsEngine {
 
   ingestHR(s: HRSample) {
     this.hr = s.hr;
-    if (s.hr > this.hrMax) this.hrMax = s.hr;
+    // hrMax is tracked in tick() under the !paused guard (like hrAvg), so a
+    // post-effort recovery spike during a pause can't pollute the session max.
     for (const r of s.rr) this.rr.push({ t: s.t, v: r });
   }
 
@@ -184,11 +201,14 @@ export class MetricsEngine {
 
     if (this.running && this.lastTick > 0) {
       const dt = Math.min((now - this.lastTick) / 1000, 1.5); // clamp gaps
-      if (dt > 0) {
-        // HR accumulators + zone time
+      if (dt > 0 && !this.paused) {
+        // active recording time (excludes paused spans) — the basis for Strava
+        this.activeSec += dt;
+        // HR accumulators + zone time + max (all exclude paused rest)
         if (this.hr !== null) {
           this.hrSum += this.hr * dt;
           this.hrCount += dt;
+          if (this.hr > this.hrMax) this.hrMax = this.hr;
           const z = zoneForHr(this.hr, bounds);
           this.zoneTimeSec[z - 1] += dt;
           this.kcal += this.kcalPerSec(this.hr) * dt;
@@ -203,10 +223,12 @@ export class MetricsEngine {
       this.detector.update(now, this.hr, this.lastSpeed);
       this.pruneRR(now);
 
-      // 1 Hz efficiency buffer (for decoupling)
-      if (now - this.lastEff >= 1000 && this.hr !== null) {
+      // 1 Hz efficiency buffer (for decoupling) — active only, and stamped on the
+      // ACTIVE timeline (not wall clock) so a pause doesn't inflate the span or
+      // shift the first/second-half split that computeDecoupling derives from t.
+      if (now - this.lastEff >= 1000 && this.hr !== null && !this.paused) {
         this.lastEff = now;
-        this.effBuf.push({ t: now, hr: this.hr, speedMps: this.lastSpeed });
+        this.effBuf.push({ t: this.startT + this.activeSec * 1000, hr: this.hr, speedMps: this.lastSpeed });
         if (this.effBuf.length > MAX_SERIES) this.effBuf.shift();
       }
 
@@ -220,8 +242,9 @@ export class MetricsEngine {
         this.decoupling = computeDecoupling(this.effBuf);
       }
 
-      // 1 Hz series for charts
-      if (now - this.lastSeries >= SERIES_MS) {
+      // 1 Hz series for charts — active only, so the saved trace excludes pauses
+      // (which is what lets the .FIT/Strava report active time, not wall clock).
+      if (now - this.lastSeries >= SERIES_MS && !this.paused) {
         this.lastSeries = now;
         this.series.push({
           t: now,
@@ -246,6 +269,7 @@ export class MetricsEngine {
     return {
       t: now,
       elapsedSec: this.startT ? (now - this.startT) / 1000 : 0,
+      activeSec: this.activeSec,
       hr,
       hrAvg: this.hrCount > 0 ? this.hrSum / this.hrCount : null,
       hrMax: this.hrMax || null,

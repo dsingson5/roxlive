@@ -260,11 +260,24 @@ function RpeSection({ summary, onRpe }: { summary: SessionSummary; onRpe: (rpe: 
   );
 }
 
+/**
+ * Drop a date segment from a calendar-derived title. The calendar importer joins
+ * "title · date", so the date rides into the Strava name — strip any ' · '/'-'
+ * segment that is ENTIRELY date tokens (ISO, slash-date, weekday, month, day),
+ * leaving real workout text like "Bike 4×4" or "Zone 2" untouched.
+ */
+function stripDate(title: string): string {
+  const DATEY = /\b(\d{4}-\d{2}-\d{2}|\d{1,2}[/.]\d{1,2}(?:[/.]\d{2,4})?|(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*|\d{1,4}(?:st|nd|rd|th)?)\b/gi;
+  const isDateSeg = (s: string) => s.trim().length > 0 && s.replace(DATEY, "").replace(/[\s,.\-–—]/g, "") === "";
+  const parts = title.split(/\s*[·•|]\s*/).map((s) => s.trim()).filter(Boolean);
+  return parts.filter((p) => !isDateSeg(p)).join(" · "); // "" if the title was only a date → caller falls back
+}
+
 /** Branded default title for a Strava upload, tailored to the session type. */
 function stravaDefaultName(summary: SessionSummary): string {
   const brand = "RoxLive by Hybrid Crew";
   if (summary.mode === "hyrox") return `HYROX · ${brand}`;
-  if (summary.mode === "workout") return `${summary.planTitle?.trim() || "Workout"} · ${brand}`;
+  if (summary.mode === "workout") return `${stripDate(summary.planTitle?.trim() || "") || "Workout"} · ${brand}`;
   // Free session — name it after the sport when we know it.
   const sport = summary.modality && summary.modality !== "mixed" ? modalityDef(summary.modality).label : null;
   return sport ? `${sport} · ${brand}` : `${brand} session`;
@@ -282,7 +295,7 @@ function StravaPost({
   const defaultName = stravaDefaultName(summary);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(defaultName);
-  const [desc, setDesc] = useState("Recorded with RoxLive by Hybrid Crew");
+  const [desc, setDesc] = useState("RoxLive by Hybrid Crew");
   const [state, setState] = useState<"idle" | "posting" | "done" | "error">("idle");
   const [msg, setMsg] = useState<string | null>(null);
 

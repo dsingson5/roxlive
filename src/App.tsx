@@ -18,7 +18,7 @@ import type {
   MetricsSnapshot,
 } from "./types";
 import { DEFAULT_VOICE } from "./types";
-import { SINGLE_MODALITIES, guessModality, type Modality } from "./lib/modality";
+import { SINGLE_MODALITIES, guessModality, modalityDef, type Modality } from "./lib/modality";
 import { buildRace } from "./data/hyrox";
 import { selfTestDFA } from "./lib/dfa";
 import { clonePlan, cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan } from "./lib/workout";
@@ -394,21 +394,33 @@ export default function App() {
     pausedAtRef.current = null;
     pauseAccumRef.current = 0;
     setPaused(false);
+    eng.resume(); // clear any engine-level pause so the next session starts clean
   };
 
   const togglePause = () => {
-    if (anchorRef.current == null) return;
+    // Works in every live mode (free / hyrox / workout) — not just when a plan
+    // clock is anchored, so a Free session can be paused too.
+    if (eng.mode === "idle") return;
     const t = performance.timeOrigin + performance.now();
     if (pausedAtRef.current == null) {
-      pausedAtRef.current = t; // pause: freeze the plan clock
+      pausedAtRef.current = t; // freeze the plan clock (workout) — harmless in free
       runner.coach.cancel(); // stop any in-flight countdown speech
+      eng.pause(); // freeze active time + the recorded trace; HR keeps reading
       setPaused(true);
     } else {
       pauseAccumRef.current += t - pausedAtRef.current; // resume: absorb paused span
       pausedAtRef.current = null;
+      eng.resume();
       setPaused(false);
     }
   };
+
+  // Pause is offered only for solo sessions that are actually recording: Free
+  // AFTER its START countdown, or a guided Workout once the plan clock is
+  // anchored. HYROX is excluded — its race clock + station beeps run off raw
+  // wall-clock elapsed and aren't pause-aware — and the pre-START arming phase
+  // can't pause (which used to strand a "paused" indicator over a live session).
+  const canPause = eng.mode !== "idle" && (raceMode === "free" ? freeStarted : raceMode === "workout" ? workoutAnchor != null : false);
 
   // Demo / Connect just bring a HR source online. In workout mode nothing is
   // guided yet — the plan waits for the explicit START press.
@@ -713,13 +725,19 @@ export default function App() {
     } else if (raceMode === "hyrox") {
       line1 = segments[currentIndex]?.label;
       if (hyroxRemaining != null) line2 = fmtClock(Math.ceil(hyroxRemaining));
+    } else if (raceMode === "free" && eng.mode !== "idle") {
+      // Free session has no plan/countdown — surface the sport + a live cue.
+      line1 = modalityDef(freeModality).label;
+      status = paused ? undefined : "● REC";
+      statusColor = "#ff4d6b";
     }
     return {
-      title: raceMode === "workout" && plan ? plan.title : raceMode === "hyrox" ? "HYROX" : "Analyzer",
+      title: raceMode === "workout" && plan ? plan.title : raceMode === "hyrox" ? "HYROX" : "Free session",
       mode: "solo",
       hr: snap.hr,
       zoneColor,
       pctMax: snap.pctMax,
+      activeClock: fmtClock(snap.activeSec),
       clock: fmtClock(snap.elapsedSec),
       line1,
       line2,
@@ -808,7 +826,8 @@ export default function App() {
       else if (canStart) handleStartWorkout();
     });
     set("pause", () => {
-      if (raceMode === "workout" && workoutAnchor != null && !paused) togglePause();
+      // Free + workout (after START) can pause from the PiP; hyrox is excluded.
+      if (canPause && !paused) togglePause();
     });
     set("stop", () => {
       if (raceMode === "squad") squad.stopAll();
@@ -818,7 +837,7 @@ export default function App() {
       (["play", "pause", "stop"] as MediaSessionAction[]).forEach((a) => set(a, null));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pip.active, paused, raceMode, eng.mode, workoutAnchor, plan]);
+  }, [pip.active, paused, raceMode, eng.mode, workoutAnchor, plan, canPause]);
 
   return (
     <div className="min-h-screen">
@@ -839,6 +858,8 @@ export default function App() {
         onConnect={handleConnect}
         onDemo={handleDemo}
         onStop={handleStop}
+        onPause={canPause ? togglePause : undefined}
+        paused={paused}
         onSettings={() => setSettingsOpen(true)}
         onHistory={() => { setHistory(loadHistory()); setHistoryOpen(true); syncNow(); logActivity("history_view"); }}
         onForm={() => { setFormOpen(true); logActivity("form_lab"); }}
@@ -1392,6 +1413,7 @@ function buildSummary(
     startedAt: snap.t - snap.elapsedSec * 1000,
     endedAt: snap.t,
     durationSec: snap.elapsedSec,
+    activeSec: Math.round(snap.activeSec),
     mode: raceMode,
     modality,
     adherencePct: raceMode === "workout" ? workout.adherencePct : null,

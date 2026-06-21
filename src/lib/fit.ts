@@ -165,8 +165,14 @@ const RESP: FieldDef[] = [
 export function encodeFitActivity(summary: SessionSummary, series: SeriesPoint[]): Uint8Array {
   const body = new Buf();
   const startMs = summary.startedAt;
-  const elapsedMs = Math.max(1000, Math.round(summary.durationSec * 1000));
-  const endMs = startMs + elapsedMs; // authoritative end = start + RoxLive's own duration
+  // Use ACTIVE (moving) duration, not wall clock — so Strava reports time spent
+  // working, excluding pauses. The recorded series already excludes paused spans
+  // (the engine stops sampling while paused), so the active timeline below is a
+  // gap-free compression of that data. Falls back to durationSec for sessions
+  // saved before active-time tracking.
+  const activeSec = Math.max(1, Math.round(summary.activeSec ?? summary.durationSec));
+  const elapsedMs = activeSec * 1000;
+  const endMs = startMs + elapsedMs; // synthetic active end = start + active duration
   const startFit = toFit(startMs);
   const endFit = Math.max(startFit + 1, toFit(endMs));
 
@@ -178,48 +184,50 @@ export function encodeFitActivity(summary: SessionSummary, series: SeriesPoint[]
   writeDef(body, 1, 21, EVENT);
   writeData(body, 1, EVENT, [startFit, 0, 0]);
 
-  // record stream — RESAMPLED to a gap-free grid spanning the WHOLE session
-  // window [start, start+duration]. This makes Strava's elapsed/moving time equal
-  // RoxLive's own durationSec exactly, regardless of (a) HR dropouts — the old
-  // code skipped null-HR points, leaving gaps Strava auto-paused on — or (b) a
-  // truncated history buffer that dropped a long ride's opening minutes. HR /
-  // speed / cadence are carried forward from the most recent prior sample.
+  // record stream — the (pause-excluded) samples re-laid onto a gap-free active
+  // timeline of `activeSec` seconds. Each grid second proportionally maps to a
+  // series point (they're evenly spaced in active time), carrying HR/speed/
+  // cadence forward. Result: Strava's elapsed/moving time == active duration,
+  // with no gaps for its auto-pause to trip on and no buffer-truncation effect.
   writeDef(body, 2, 20, RECORD);
-  const pts = series.filter((p) => p.t >= startMs - 2000 && p.t <= endMs + 2000).sort((a, b) => a.t - b.t);
-  const totalSec = Math.round(elapsedMs / 1000);
+  const pts = series.slice().sort((a, b) => a.t - b.t);
+  const n = pts.length;
+  const totalSec = activeSec;
   const stepSec = Math.max(1, Math.ceil(totalSec / 36000)); // bound the record count (~10 h @ 1 Hz)
+  const idxAt = (sec: number): number => (n <= 1 ? n - 1 : Math.round((sec / totalSec) * (n - 1)));
   let dist = 0;
-  let pi = 0;
+  let pi = -1;
   let recordCount = 0;
   let curHr: number | null = null;
   let curSpeed: number | null = null;
   let curCad: number | null = null;
   for (let sec = 0; sec <= totalSec; sec += stepSec) {
-    const t = startMs + sec * 1000;
-    while (pi < pts.length && pts[pi].t <= t) {
+    const target = idxAt(sec);
+    while (pi < target) {
+      pi++;
       const p = pts[pi];
       if (p.hr != null) curHr = p.hr;
       if (p.speedMps != null) curSpeed = p.speedMps;
       if (p.cadence != null) curCad = p.cadence;
-      pi++;
     }
     if (curSpeed != null) dist += curSpeed * stepSec;
-    writeData(body, 2, RECORD, [toFit(t), curHr, curCad, dist * 100, curSpeed != null ? curSpeed * 1000 : null]);
+    writeData(body, 2, RECORD, [toFit(startMs + sec * 1000), curHr, curCad, dist * 100, curSpeed != null ? curSpeed * 1000 : null]);
     recordCount++;
   }
 
   // respiration_rate stream (breaths/min) — captured from the HRM's R-R intervals
   // (RSA). Throttled to ~0.2 Hz; carried forward; skipped while unavailable.
   writeDef(body, 6, 297, RESP);
-  let ri = 0;
+  let ri = -1;
   let rCur: number | null = null;
   let lastResp = -Infinity;
   for (let sec = 0; sec <= totalSec; sec += stepSec) {
-    const t = startMs + sec * 1000;
-    while (ri < pts.length && pts[ri].t <= t) {
-      if (pts[ri].brpm != null) rCur = pts[ri].brpm;
+    const target = idxAt(sec);
+    while (ri < target) {
       ri++;
+      if (pts[ri].brpm != null) rCur = pts[ri].brpm;
     }
+    const t = startMs + sec * 1000;
     if (rCur != null && rCur > 0 && t - lastResp >= 5000) {
       lastResp = t;
       writeData(body, 6, RESP, [toFit(t), Math.round(rCur * 100)]);
@@ -233,19 +241,19 @@ export function encodeFitActivity(summary: SessionSummary, series: SeriesPoint[]
   writeDef(body, 3, 19, LAP);
   const segs = summary.segments.filter((s) => s.splitSec != null && s.splitSec > 0);
   if (segs.length > 0) {
+    // Lay laps consecutively on the active timeline. Raw splits can be wall-clock
+    // (a paused session's per-interval times include the pause), which would make
+    // the lap sum exceed activeSec and push the last lap PAST the record stream /
+    // session end — letting Strava re-derive a longer duration and undo the
+    // active-time fix. Scale the splits so they sum to at most activeSec
+    // (scale == 1 for an un-paused session, so no change there).
+    const sumSplit = segs.reduce((a, s) => a + (s.splitSec as number), 0);
+    const scale = sumSplit > 0 ? Math.min(1, activeSec / sumSplit) : 1;
+    let lapCursor = startMs;
     segs.forEach((s, i) => {
-      const ms = Math.round((s.splitSec as number) * 1000);
-      writeData(body, 3, LAP, [
-        i,
-        toFit(s.endT ?? s.startT + ms),
-        toFit(s.startT),
-        ms,
-        ms,
-        s.avgHr,
-        s.maxHr,
-        9,
-        1,
-      ]);
+      const ms = Math.round((s.splitSec as number) * scale * 1000);
+      writeData(body, 3, LAP, [i, toFit(lapCursor + ms), toFit(lapCursor), ms, ms, s.avgHr, s.maxHr, 9, 1]);
+      lapCursor += ms;
     });
   } else {
     writeData(body, 3, LAP, [0, endFit, startFit, elapsedMs, elapsedMs, summary.avgHr, summary.maxHr, 9, 1]);
