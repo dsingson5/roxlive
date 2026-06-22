@@ -162,7 +162,17 @@ const RESP: FieldDef[] = [
 
 /* ---------------- encoder ---------------- */
 
-export function encodeFitActivity(summary: SessionSummary, series: SeriesPoint[]): Uint8Array {
+export function encodeFitActivity(
+  summary: SessionSummary,
+  series: SeriesPoint[],
+  opts: { recoveryTail?: boolean } = {}
+): Uint8Array {
+  // The recovery tail extends the record stream past the session end. Strava
+  // RE-DERIVES elapsed time from the record-stream span, so including it would
+  // re-inflate the duration we deliberately keep = active time. Default on (for
+  // the downloaded .FIT → Garmin Connect / intervals.icu, which honor the
+  // session totals), but the Strava upload passes recoveryTail:false.
+  const includeRecovery = opts.recoveryTail !== false;
   const body = new Buf();
   const startMs = summary.startedAt;
   // Use ACTIVE (moving) duration, not wall clock — so Strava reports time spent
@@ -236,6 +246,17 @@ export function encodeFitActivity(summary: SessionSummary, series: SeriesPoint[]
 
   // timer stop
   writeData(body, 1, EVENT, [endFit, 0, 4]);
+
+  // heart-rate recovery tail — post-workout HR drop, written as records AFTER the
+  // timer-stop so it doesn't count toward the session's active/timer totals (those
+  // stay = activeSec). Garmin Connect / intervals.icu read this as the recovery curve.
+  const rec = summary.recovery;
+  if (includeRecovery && rec && rec.samples && rec.samples.length) {
+    for (const rs of rec.samples) {
+      if (rs.hr == null || rs.t <= 0) continue; // t<=0 would collide with the final active-record timestamp
+      writeData(body, 2, RECORD, [toFit(endMs + rs.t * 1000), rs.hr, null, dist * 100, null]);
+    }
+  }
 
   // laps — one per recorded segment/interval, else a single whole-session lap
   writeDef(body, 3, 19, LAP);

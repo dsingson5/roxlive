@@ -301,7 +301,10 @@ export async function postActivity(
 ): Promise<PostResult> {
   try {
     const access = await freshAccessToken();
-    const bytes = encodeFitActivity(summary, series.length ? series : summary.series);
+    // Exclude the recovery tail from the Strava upload: Strava recomputes elapsed
+    // from the record-stream span, so a trailing recovery curve would re-inflate
+    // the duration past the active time. (The downloaded .FIT keeps it.)
+    const bytes = encodeFitActivity(summary, series.length ? series : summary.series, { recoveryTail: false });
     const data = await callWorker("upload", {
       access_token: access,
       fitBase64: bytesToBase64(bytes),

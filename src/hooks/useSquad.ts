@@ -47,7 +47,7 @@ interface Rec {
 }
 
 const emptySnap = (p: AthleteProfile): MetricsSnapshot => ({
-  t: now(), elapsedSec: 0, activeSec: 0, hr: null, hrAvg: null, hrMax: null, zone: null,
+  t: now(), elapsedSec: 0, activeSec: 0, recovery: { active: false, secsSince: 0, peakHr: null, hr30: null, hr60: null, hrr30: null, hrr60: null }, hr: null, hrAvg: null, hrMax: null, zone: null,
   zoneBounds: zoneBounds(p), zoneTimeSec: [0, 0, 0, 0, 0], pctMax: null,
   hrv: { rmssd: null, sdnn: null, beats: 0 }, dfa: { alpha1: null, artifactPct: 0, beats: 0, reliable: false },
   respiration: { brpm: null, confidence: 0 }, decoupling: { pct: null, firstHalf: null, secondHalf: null, ready: false, mode: "speed" },

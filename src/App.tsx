@@ -82,6 +82,11 @@ export default function App() {
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   /** true when a summary is shown but NOT yet saved (a <10 s session pending keep/delete) */
   const [summaryUnsaved, setSummaryUnsaved] = useState(false);
+  /** post-stop heart-rate-recovery window: HRM stays connected ~60 s after stop. */
+  const [recovering, setRecovering] = useState(false);
+  const recoveringRef = useRef(false); // guards a stale recovery timer from hitting a new session
+  const recoveryTimerRef = useRef<number | null>(null);
+  const lastSummaryIdRef = useRef<string | null>(null);
   const [manualFocus, setManualFocus] = useState<number | null>(null);
   // Free START gate: connecting only arms the sensor; the session begins on the
   // explicit START press, after a big 3-2-1 countdown.
@@ -345,7 +350,7 @@ export default function App() {
   }, [plan, hyroxPlan]);
 
   const workoutActive =
-    raceMode === "workout" && eng.mode !== "idle" && !!plan && workoutAnchor != null;
+    raceMode === "workout" && eng.mode !== "idle" && !!plan && workoutAnchor != null && !recovering;
   const runner = useWorkoutRunner({
     plan,
     profile,
@@ -406,11 +411,13 @@ export default function App() {
       pausedAtRef.current = t; // freeze the plan clock (workout) — harmless in free
       runner.coach.cancel(); // stop any in-flight countdown speech
       eng.pause(); // freeze active time + the recorded trace; HR keeps reading
+      if (eng.mode === "live") eng.startRecovery(); // capture 30 s / 60 s recovery HR (live sensor only)
       setPaused(true);
     } else {
       pauseAccumRef.current += t - pausedAtRef.current; // resume: absorb paused span
       pausedAtRef.current = null;
       eng.resume();
+      eng.clearRecovery(); // effort resumed — drop the partial recovery
       setPaused(false);
     }
   };
@@ -637,11 +644,11 @@ export default function App() {
 
   // ---- HYROX segment-end countdown + voice -------------------------------
   const hyroxRemaining = useMemo(() => {
-    if (raceMode !== "hyrox" || eng.mode === "idle") return null;
+    if (raceMode !== "hyrox" || eng.mode === "idle" || recovering) return null;
     const end = cum[currentIndex];
     const r = end - snap.elapsedSec;
     return r > 0 && r <= 60 ? r : null;
-  }, [raceMode, eng.mode, cum, currentIndex, snap.elapsedSec]);
+  }, [raceMode, eng.mode, cum, currentIndex, snap.elapsedSec, recovering]);
 
   useEffect(() => {
     if (hyroxRemaining == null) return;
@@ -748,8 +755,26 @@ export default function App() {
   };
   paintRef.current = (ctx, w, h) => paintFrame(ctx, w, h, buildPipFrame());
 
+  // Close out a post-stop recovery window: read the captured HRR, disconnect the
+  // sensor, and fold the recovery into the shown + saved summary. Idempotent.
+  const finalizeStop = () => {
+    if (recoveryTimerRef.current) { clearTimeout(recoveryTimerRef.current); recoveryTimerRef.current = null; }
+    if (!recoveringRef.current) return; // not in a recovery window (already finalized / new session)
+    recoveringRef.current = false;
+    const rec = eng.getRecovery();
+    eng.stop();
+    clearAnchor();
+    setFreeStarted(false);
+    setRecovering(false);
+    if (rec) {
+      setSummary((prev) => (prev ? { ...prev, recovery: rec } : prev));
+      if (lastSummaryIdRef.current) setHistory(updateHistory(lastSummaryIdRef.current, { recovery: rec }));
+    }
+  };
+
   const handleStop = () => {
     if (raceMode === "squad") return; // squad has its own lifecycle
+    if (recoveringRef.current) return; // already stopped + capturing recovery — ignore re-presses
     const workoutSegs =
       raceMode === "workout" && plan && workoutAnchor != null
         ? workoutSegmentRecords(plan, workoutAnchor, voice.leadInSec, runner.state.perInterval, snap.t)
@@ -774,15 +799,13 @@ export default function App() {
     // workout later (workout = the built/imported plan; hyrox = the race plan).
     s.plan = raceMode === "workout" ? plan ?? undefined : raceMode === "hyrox" ? hyroxPlan : undefined;
     fullSeriesRef.current = [...series];
-    eng.stop();
-    clearAnchor();
-    setFreeStarted(false);
     if (startTimerRef.current) { clearTimeout(startTimerRef.current); startTimerRef.current = null; }
     setStartCountdown(null);
     // Auto-save only sessions of real length + data. Anything under 10 s is NOT
     // recorded yet — the summary asks the user to keep or delete it.
     const hasActivity = s.avgHr != null || s.distanceM > 0;
-    if (s.durationSec >= 10 && hasActivity) {
+    const saved = s.durationSec >= 10 && hasActivity;
+    if (saved) {
       addToHistory(s);
       setHistory(loadHistory());
       logActivity("workout_done", `${s.modality ?? s.mode} · ${Math.round(s.durationSec / 60)}m`);
@@ -790,7 +813,25 @@ export default function App() {
     } else {
       setSummaryUnsaved(true);
     }
+    lastSummaryIdRef.current = s.id;
     setSummary(s);
+
+    // Recovery HR: keep the HRM connected ~60 s after a real session so we can
+    // capture 30 s / 60 s heart-rate recovery, then finalize + disconnect. Freeze
+    // the engine (pause) so the recovery rest doesn't extend the recorded workout.
+    // LIVE sensor only — the demo simulator keeps driving race HR, so there'd be
+    // no real drop to measure.
+    if (saved && eng.mode === "live" && snap.hr != null) {
+      eng.pause();
+      if (!snap.recovery.active) eng.startRecovery(); // keep an in-progress pause recovery (real peak) rather than re-anchoring
+      recoveringRef.current = true;
+      setRecovering(true);
+      recoveryTimerRef.current = window.setTimeout(finalizeStop, 63000);
+    } else {
+      eng.stop();
+      clearAnchor();
+      setFreeStarted(false);
+    }
   };
 
   // Start/Pause/Stop controls ON the floating PiP window via the Media Session
@@ -870,6 +911,20 @@ export default function App() {
       />
 
       <main className="max-w-[1480px] mx-auto px-4 sm:px-6 py-3 space-y-3">
+        {paused && eng.mode === "live" && (
+          <div className="card px-4 py-3 flex items-center gap-3" style={{ borderColor: "var(--color-volt)", background: "rgba(216,255,58,0.06)" }}>
+            <span className="text-xl">⌚</span>
+            <div className="flex-1 leading-snug">
+              <div className="text-sm font-semibold text-[var(--color-volt)]">Keep your HRM on — recording recovery heart rate</div>
+              <div className="text-[12px] text-[var(--color-ink-dim)]">
+                Don't remove the strap: capturing your 30-second &amp; 1-minute recovery HR
+                {snap.recovery.active ? ` · ${snap.recovery.secsSince}s` : ""}
+                {snap.recovery.hrr30 != null ? ` · 30s −${snap.recovery.hrr30} bpm` : ""}
+                {snap.recovery.hrr60 != null ? ` · 1 min −${snap.recovery.hrr60} bpm` : ""}
+              </div>
+            </div>
+          </div>
+        )}
         {notice && (
           <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="card px-4 py-3 text-sm flex items-center gap-3" style={{ borderColor: "rgba(252,76,2,0.4)" }}>
             <span className="text-[#fc4c02]">●</span>
@@ -1052,6 +1107,9 @@ export default function App() {
         fullSeries={fullSeriesRef.current}
         strava={{ connected: stravaConnected, post: strava.postActivity }}
         unsaved={summaryUnsaved}
+        recovering={recovering}
+        liveRecovery={snap.recovery}
+        onFinishRecovery={finalizeStop}
         onKeep={() => {
           if (!summary) return;
           addToHistory(summary);
@@ -1070,6 +1128,7 @@ export default function App() {
           if (!summaryUnsaved) setHistory(updateHistory(summary.id, { feel }));
         }}
         onClose={() => {
+          finalizeStop(); // capture recovery + disconnect if still in the recovery window
           setSummary(null);
           setSummaryUnsaved(false);
           eng.reset();

@@ -21,6 +21,7 @@ const emptySnapshot = (profile: AthleteProfile): MetricsSnapshot => ({
   t: now(),
   elapsedSec: 0,
   activeSec: 0,
+  recovery: { active: false, secsSince: 0, peakHr: null, hr30: null, hr60: null, hrr30: null, hrr60: null },
   hr: null,
   hrAvg: null,
   hrMax: null,
@@ -126,6 +127,11 @@ export function useEngine() {
   // sensor keeps streaming HR for the live display.
   const pause = useCallback(() => engineRef.current.pause(), []);
   const resume = useCallback(() => engineRef.current.resume(), []);
+
+  // Heart-rate recovery capture (HRR30/HRR60) — anchor effort-end, read the result.
+  const startRecovery = useCallback(() => engineRef.current.startRecovery(now()), []);
+  const clearRecovery = useCallback(() => engineRef.current.clearRecovery(), []);
+  const getRecovery = useCallback(() => engineRef.current.getRecovery(), []);
 
   const onHR = useCallback((s: HRSample) => engineRef.current.ingestHR(s), []);
   const onPace = useCallback((s: PaceSample) => engineRef.current.ingestPace(s), []);
@@ -272,6 +278,9 @@ export function useEngine() {
     stop,
     pause,
     resume,
+    startRecovery,
+    clearRecovery,
+    getRecovery,
     reset,
     restartSession,
     simRef,

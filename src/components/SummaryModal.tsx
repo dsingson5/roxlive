@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import type { RpeLog, SeriesPoint, SessionSummary } from "../types";
+import type { RecoverySnap, RpeLog, SeriesPoint, SessionSummary } from "../types";
 import type { PostResult } from "../lib/strava";
 import { modalityDef } from "../lib/modality";
 import { Sparkline } from "./Charts";
@@ -18,6 +18,9 @@ export function SummaryModal({
   onRepeat,
   unsaved,
   onKeep,
+  recovering,
+  liveRecovery,
+  onFinishRecovery,
   onClose,
 }: {
   summary: SessionSummary | null;
@@ -37,6 +40,12 @@ export function SummaryModal({
   unsaved?: boolean;
   /** keep (record) an unsaved short session */
   onKeep?: () => void;
+  /** true while the post-stop recovery window is still capturing (HRM stays on) */
+  recovering?: boolean;
+  /** live recovery snapshot during the capture window */
+  liveRecovery?: RecoverySnap;
+  /** finish the recovery capture early + disconnect */
+  onFinishRecovery?: () => void;
   onClose: () => void;
 }) {
   return (
@@ -81,6 +90,37 @@ export function SummaryModal({
                     <button onClick={onClose} className="btn-ghost flex-1 h-10 text-sm" style={{ color: "var(--color-red)", borderColor: "rgba(255,77,77,0.35)" }}>Delete</button>
                     <button onClick={onKeep} className="btn-volt flex-1 h-10 text-sm font-semibold">Keep it</button>
                   </div>
+                </div>
+              )}
+
+              {/* Recovery HR — live capture window (HRM stays on), then the result. */}
+              {recovering && (
+                <div className="card p-4 mb-4" style={{ borderColor: "var(--color-volt)", background: "rgba(216,255,58,0.06)" }}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-lg">⌚</span>
+                    <div className="card-title" style={{ color: "var(--color-volt)" }}>Recovery HR — keep your HRM on</div>
+                    <div className="ml-auto num text-sm text-[var(--color-ink-dim)]">
+                      {liveRecovery ? `${Math.max(0, 60 - liveRecovery.secsSince)}s left` : ""}
+                    </div>
+                  </div>
+                  <div className="text-[12px] text-[var(--color-ink-dim)] mb-2">Don't remove the strap — measuring how fast your heart rate drops after stopping.</div>
+                  <div className="flex gap-4">
+                    <RecStat label="peak" value={liveRecovery?.peakHr != null ? String(liveRecovery.peakHr) : "—"} unit="bpm" />
+                    <RecStat label="30 s drop" value={liveRecovery?.hrr30 != null ? `−${liveRecovery.hrr30}` : "…"} unit="bpm" />
+                    <RecStat label="1 min drop" value={liveRecovery?.hrr60 != null ? `−${liveRecovery.hrr60}` : "…"} unit="bpm" />
+                  </div>
+                  <button onClick={onFinishRecovery} className="btn-ghost w-full h-9 mt-3 text-[13px]">Finish &amp; disconnect now</button>
+                </div>
+              )}
+              {!recovering && summary.recovery && (summary.recovery.hrr30 != null || summary.recovery.hrr60 != null) && (
+                <div className="card p-4 mb-4">
+                  <div className="card-title mb-2">Heart-Rate Recovery</div>
+                  <div className="flex gap-4">
+                    <RecStat label="peak" value={String(summary.recovery.peakHr)} unit="bpm" />
+                    <RecStat label="30 s drop" value={summary.recovery.hrr30 != null ? `−${summary.recovery.hrr30}` : "—"} unit="bpm" accent="var(--color-mint)" />
+                    <RecStat label="1 min drop" value={summary.recovery.hrr60 != null ? `−${summary.recovery.hrr60}` : "—"} unit="bpm" accent="var(--color-mint)" />
+                  </div>
+                  <div className="text-[11px] text-[var(--color-ink-faint)] mt-2">A bigger 1-minute drop means faster recovery — a sign of aerobic fitness. Saved with the session &amp; written to the .FIT.</div>
                 </div>
               )}
 
@@ -158,15 +198,19 @@ export function SummaryModal({
 
               {onRpe && <RpeSection summary={summary} onRpe={onRpe} />}
 
-              {strava?.connected && (
+              {strava?.connected && !recovering && (
                 <StravaPost summary={summary} series={fullSeries.length ? fullSeries : summary.series} post={strava.post} />
+              )}
+              {recovering && (
+                <div className="text-[12px] text-[var(--color-ink-faint)] mt-3">Export &amp; Strava unlock once recovery HR is captured — finish above, or wait for the countdown.</div>
               )}
 
               <div className="flex gap-2 mt-4">
                 <button
                   onClick={() => downloadFit(summary, fullSeries.length ? fullSeries : summary.series)}
-                  className="btn-ghost flex-1 h-11 text-sm"
-                  title="Garmin FIT activity — import into Garmin Connect, Strava, TrainingPeaks…"
+                  disabled={recovering}
+                  className="btn-ghost flex-1 h-11 text-sm disabled:opacity-40"
+                  title={recovering ? "Finishing recovery capture…" : "Garmin FIT activity — import into Garmin Connect, Strava, TrainingPeaks…"}
                 >
                   ⬇ Export .FIT
                 </button>
@@ -363,6 +407,19 @@ function Stat({ label, value, unit, accent }: { label: string; value: string; un
         {unit && <span className="text-xs text-[var(--color-ink-faint)] ml-1">{unit}</span>}
       </div>
       <div className="text-[10px] tracking-[0.12em] text-[var(--color-ink-faint)] mt-1 uppercase">{label}</div>
+    </div>
+  );
+}
+
+/** Compact recovery-HR stat (peak / 30 s / 1 min drop). */
+function RecStat({ label, value, unit, accent }: { label: string; value: string; unit?: string; accent?: string }) {
+  return (
+    <div className="flex-1">
+      <div className="num text-2xl leading-none" style={{ color: accent ?? "var(--color-ink)" }}>
+        {value}
+        {unit && <span className="text-[11px] text-[var(--color-ink-faint)] ml-1">{unit}</span>}
+      </div>
+      <div className="text-[10px] tracking-[0.1em] text-[var(--color-ink-faint)] mt-1 uppercase">{label}</div>
     </div>
   );
 }

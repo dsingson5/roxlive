@@ -17,6 +17,7 @@ import type {
   HrvResult,
   RespirationResult,
   DecouplingResult,
+  RecoveryResult,
 } from "../types";
 import { computeDFA } from "./dfa";
 import { computeHRV } from "./hrv";
@@ -46,6 +47,7 @@ export class MetricsEngine {
   private effBuf: EffSample[] = []; // 1 Hz {t,hr,speed} for decoupling
 
   private hr: number | null = null;
+  private hrT = 0; // timestamp of the last HR sample (for staleness checks)
   private lastSpeed: number | null = null;
   private cadence: number | null = null;
   private cadenceT = 0;
@@ -57,6 +59,15 @@ export class MetricsEngine {
   private running = false;
   private paused = false; // app-level pause: HR keeps reading, but active time / trace freeze
   private activeSec = 0; // time actually recording (excludes paused spans) — used for Strava
+
+  // Heart-rate recovery (HRR): captured from an effort-end anchor (pause/stop)
+  // while the HRM keeps streaming. Independent of the paused/active accounting.
+  private recStartT: number | null = null;
+  private recPeak = 0;
+  private recHr30: number | null = null;
+  private recHr60: number | null = null;
+  private recSamples: { t: number; hr: number }[] = [];
+  private lastRecSample = 0;
 
   private hrSum = 0;
   private hrCount = 0;
@@ -119,10 +130,41 @@ export class MetricsEngine {
     return this.paused;
   }
 
+  /** Begin heart-rate-recovery capture: anchor "now" as effort-end and seed the
+   *  peak with the current HR. Call on pause / stop while the HRM is still on. */
+  startRecovery(now: number) {
+    this.recStartT = now;
+    // Seed the peak only from a fresh, physiological reading (a 0/contact-loss
+    // packet must not anchor the peak). lastRecSample = now → first curve sample
+    // lands ~3 s in, never at t=0 (which would collide with the active end).
+    this.recPeak = this.hr != null && this.hr > 30 && now - this.hrT <= 8000 ? this.hr : 0;
+    this.recHr30 = null;
+    this.recHr60 = null;
+    this.recSamples = [];
+    this.lastRecSample = now;
+  }
+  /** Abandon an in-progress recovery (e.g. the athlete resumed the workout). */
+  clearRecovery() {
+    this.recStartT = null;
+    this.recPeak = 0;
+    this.recHr30 = null;
+    this.recHr60 = null;
+    this.recSamples = [];
+  }
+  /** Finished recovery result, or null if none captured. */
+  getRecovery(): RecoveryResult | null {
+    if (this.recStartT == null || this.recPeak <= 0) return null;
+    const hrr30 = this.recHr30 != null ? Math.max(0, this.recPeak - this.recHr30) : null;
+    const hrr60 = this.recHr60 != null ? Math.max(0, this.recPeak - this.recHr60) : null;
+    if (hrr30 == null && hrr60 == null) return null;
+    return { peakHr: this.recPeak, hr30: this.recHr30, hr60: this.recHr60, hrr30, hrr60, samples: this.recSamples.slice() };
+  }
+
   reset() {
     this.rr = [];
     this.effBuf = [];
     this.hr = null;
+    this.hrT = 0;
     this.lastSpeed = null;
     this.cadence = null;
     this.cadenceT = 0;
@@ -133,6 +175,7 @@ export class MetricsEngine {
     this.running = false;
     this.paused = false;
     this.activeSec = 0;
+    this.clearRecovery();
     this.hrSum = 0;
     this.hrCount = 0;
     this.hrMax = 0;
@@ -152,6 +195,7 @@ export class MetricsEngine {
 
   ingestHR(s: HRSample) {
     this.hr = s.hr;
+    this.hrT = s.t; // for staleness checks (recovery capture must ignore stale HR)
     // hrMax is tracked in tick() under the !paused guard (like hrAvg), so a
     // post-effort recovery spike during a pause can't pollute the session max.
     for (const r of s.rr) this.rr.push({ t: s.t, v: r });
@@ -223,6 +267,22 @@ export class MetricsEngine {
       this.detector.update(now, this.hr, this.lastSpeed);
       this.pruneRR(now);
 
+      // Heart-rate recovery capture — runs whenever an effort-end anchor is set
+      // (pause / post-stop), regardless of the paused flag. Only act on a FRESH,
+      // physiological reading: a stale (dropout-frozen) or 0/contact-loss HR must
+      // not latch hr30/hr60 or pollute the curve (it would fake a huge or zero
+      // recovery). If HR is stale/bad at the mark, leave that HRR null.
+      if (this.recStartT != null && this.hr !== null && this.hr > 30 && now - this.hrT <= 8000) {
+        const el = now - this.recStartT;
+        if (el < 10000 && this.hr > this.recPeak) this.recPeak = this.hr; // HR can crest a few s after stopping
+        if (el >= 30000 && this.recHr30 === null) this.recHr30 = this.hr;
+        if (el >= 60000 && this.recHr60 === null) this.recHr60 = this.hr;
+        if (now - this.lastRecSample >= 3000 && el <= 65000) {
+          this.lastRecSample = now;
+          this.recSamples.push({ t: Math.round(el / 1000), hr: this.hr });
+        }
+      }
+
       // 1 Hz efficiency buffer (for decoupling) — active only, and stamped on the
       // ACTIVE timeline (not wall clock) so a pause doesn't inflate the span or
       // shift the first/second-half split that computeDecoupling derives from t.
@@ -270,6 +330,17 @@ export class MetricsEngine {
       t: now,
       elapsedSec: this.startT ? (now - this.startT) / 1000 : 0,
       activeSec: this.activeSec,
+      recovery: this.recStartT != null
+        ? {
+            active: true,
+            secsSince: Math.floor((now - this.recStartT) / 1000),
+            peakHr: this.recPeak || null,
+            hr30: this.recHr30,
+            hr60: this.recHr60,
+            hrr30: this.recHr30 != null ? Math.max(0, this.recPeak - this.recHr30) : null,
+            hrr60: this.recHr60 != null ? Math.max(0, this.recPeak - this.recHr60) : null,
+          }
+        : { active: false, secsSince: 0, peakHr: null, hr30: null, hr60: null, hrr30: null, hrr60: null },
       hr,
       hrAvg: this.hrCount > 0 ? this.hrSum / this.hrCount : null,
       hrMax: this.hrMax || null,

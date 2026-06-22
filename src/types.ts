@@ -101,10 +101,37 @@ export type IntervalState = "idle" | "work" | "rest";
 /* Engine snapshot — the single object the UI renders from             */
 /* ------------------------------------------------------------------ */
 
+/** Heart-rate recovery (HRR) — measured from the moment effort ends (pause/stop). */
+export interface RecoveryResult {
+  /** peak HR at effort end (the reference the drop is measured from). */
+  peakHr: number;
+  /** HR at +30 s / +60 s, null until that mark is reached. */
+  hr30: number | null;
+  hr60: number | null;
+  /** beats dropped by +30 s / +60 s (peakHr − hrN). Higher = fitter recovery. */
+  hrr30: number | null;
+  hrr60: number | null;
+  /** sparse HR curve {secsSinceStop, hr} for the .FIT recovery tail + chart. */
+  samples: { t: number; hr: number }[];
+}
+
+/** Live recovery state for the dashboard (during a pause / post-stop window). */
+export interface RecoverySnap {
+  active: boolean;
+  secsSince: number;
+  peakHr: number | null;
+  hr30: number | null;
+  hr60: number | null;
+  hrr30: number | null;
+  hrr60: number | null;
+}
+
 export interface MetricsSnapshot {
   t: number;
   /** wall-clock seconds since start (includes paused spans). */
   elapsedSec: number;
+  /** live heart-rate-recovery capture (active during a pause / post-stop window). */
+  recovery: RecoverySnap;
   /** seconds actually recording — excludes paused spans (basis for Strava). */
   activeSec: number;
 
@@ -342,6 +369,8 @@ export interface SessionSummary {
   minAlpha1: number | null;
   avgBrpm: number | null;
   intervalCount: number;
+  /** post-effort heart-rate recovery (30 s / 60 s), captured after pause/stop. */
+  recovery?: RecoveryResult;
   segments: SegmentRecord[];
   /** downsampled series for the summary chart (~1 point / 5 s) */
   series: SeriesPoint[];
