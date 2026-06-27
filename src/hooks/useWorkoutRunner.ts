@@ -135,6 +135,25 @@ export function useWorkoutRunner(args: {
       fn();
     };
 
+    // Spoken "how you did" verdict for a just-finished interval (or "" if N/A).
+    const verdict = (idx: number): string => {
+      const b = acc.current[idx];
+      const ivPrev = plan.intervals[idx];
+      if (!b || !ivPrev || b.totalSec < 5) return "";
+      const avg = b.hrW > 0 ? Math.round(b.hrSum / b.hrW) : null;
+      const pb = resolveBand(ivPrev.target, profile);
+      if (avg == null) return ""; // no HR captured this interval — nothing to judge
+      if (!pb) return `Last interval, averaged ${avg}.`;
+      const pct = Math.round((b.inTargetSec / b.totalSec) * 100);
+      const lead =
+        pct >= 85 ? "Nailed it" :
+        pct >= 60 ? "Solid" :
+        avg != null && avg < pb.low ? "That one was easy" :
+        avg != null && avg > pb.high ? "Pushed past target" :
+        "Keep working it";
+      return `${lead}. ${pct} percent in target last interval${avg != null ? `, averaged ${avg}` : ""}.`;
+    };
+
     if (state.phase === "leadin") {
       once("leadin", () => coach.say(`Get ready. First up, ${plan.intervals[0]?.name ?? "your workout"}.`));
       const n = Math.ceil(state.remainingSec);
@@ -149,11 +168,22 @@ export function useWorkoutRunner(args: {
       const iv = state.interval!;
       once(`start:${i}`, () => {
         coach.beep(1046, 160);
+        // how the previous interval went (queued before the new interval's call-out)
+        if (i > 0) { const v = verdict(i - 1); if (v) coach.say(v); }
         const tl = labelFor(iv, profile);
         coach.say(tl ? `${iv.name}. ${tl}.` : `${iv.name}.`);
       });
       if (iv.durationSec >= 24) {
         if (state.intervalElapsedSec >= iv.durationSec / 2) once(`half:${i}`, () => coach.say("Halfway."));
+      }
+      // ~20 s before this interval ends, preview the incoming one (needs an
+      // interval long enough for a 20 s lead, and a next interval to preview).
+      if (state.nextInterval && iv.durationSec >= 22 && state.remainingSec <= 20.5 && state.remainingSec > 11) {
+        once(`next:${i}`, () => {
+          const nx = state.nextInterval!;
+          const tl = labelFor(nx, profile);
+          coach.say(`Coming up, ${nx.name}${tl ? `, ${tl}` : ""}.`);
+        });
       }
       if (iv.durationSec > 20 && state.remainingSec <= 10.4 && state.remainingSec > 5.5) {
         once(`ten:${i}`, () => coach.say("Ten seconds."));
@@ -168,6 +198,8 @@ export function useWorkoutRunner(args: {
     } else if (state.phase === "done") {
       once("done", () => {
         coach.beep(880, 200);
+        const v = verdict((plan.intervals.length ?? 0) - 1); // the final interval's result
+        if (v) coach.say(v);
         coach.say("Workout complete. Great work.");
       });
     }
