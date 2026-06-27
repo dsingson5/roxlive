@@ -30,6 +30,7 @@ import { takeIncoming, incomingToPlan, selfTestCalendarImport } from "./lib/cale
 import { selfTestRepForm } from "./lib/repForm";
 import { analyzeSession } from "./lib/analytics";
 import { computePmc, dailyTssDense, type PmcPoint } from "./lib/analytics/trainingLoad";
+import { analyzeWorkout } from "./lib/coach";
 import { selfTestStrengthHistory } from "./lib/strengthHistory";
 import { getDeviceName, setDeviceName, defaultDeviceName, resolveDeviceLabel } from "./lib/deviceNames";
 import { CalendarPicker } from "./components/CalendarPicker";
@@ -190,6 +191,45 @@ export default function App() {
     });
     setHistory(replaceHistory(updated));
     return n;
+  };
+  // Bulk AI coach: run Claude over every saved session that has no note yet
+  // (backfilling analytics first so the prompt is rich). Sequential + gentle on
+  // rate limits; persists each note as it lands. Skips sessions already analysed.
+  const [aiBulk, setAiBulk] = useState<{ done: number; total: number; failed: number; running: boolean } | null>(null);
+  const aiBulkRef = useRef(false);
+  const aiAnalyzeAll = async () => {
+    if (aiBulkRef.current) return; // already running
+    const prof = { maxHr: profile.maxHr, restHr: profile.restHr, weightKg: profile.weightKg, age: profile.age };
+    const todo = loadHistory().filter((s) => !s.coachNote && (s.avgHr != null || s.distanceM > 0));
+    if (!todo.length) {
+      setAiBulk({ done: 0, total: 0, failed: 0, running: false });
+      window.setTimeout(() => setAiBulk(null), 4000);
+      return;
+    }
+    aiBulkRef.current = true;
+    setAiBulk({ done: 0, total: todo.length, failed: 0, running: true });
+    let done = 0;
+    let failed = 0;
+    for (const s of todo) {
+      const analytics = s.analytics ?? (() => { try { return analyzeSession(s, s.series || [], prof); } catch { return undefined; } })();
+      const withA = analytics && !s.analytics ? { ...s, analytics } : s;
+      let ok = false;
+      try {
+        const r = await analyzeWorkout({ summary: withA, profile, apiKey, model: visionModel, pmc: pmcFor(withA) });
+        if (r.ok && r.text) {
+          updateHistory(s.id, analytics && !s.analytics ? { coachNote: r.text, analytics } : { coachNote: r.text });
+          ok = true;
+        }
+      } catch { /* count as failure below */ }
+      if (ok) done++;
+      else failed++;
+      setAiBulk({ done, total: todo.length, failed, running: true });
+      await new Promise((res) => window.setTimeout(res, 500)); // ease rate limits
+    }
+    setHistory(loadHistory());
+    aiBulkRef.current = false;
+    setAiBulk({ done, total: todo.length, failed, running: false });
+    window.setTimeout(() => setAiBulk(null), 6000);
   };
 
   // Cross-device sync: a signed-in athlete's history follows them to any device.
@@ -1224,6 +1264,9 @@ export default function App() {
         onDelete={(id) => setHistory(deleteFromHistory(id))}
         onClear={() => setHistory(clearHistory())}
         onReanalyze={reanalyzeAll}
+        onAiAnalyzeAll={aiAnalyzeAll}
+        aiBulk={aiBulk}
+        hasApiKey={!!apiKey}
       />
 
       {/* Form Lab — camera-based cadence & running form (lazy-loaded). */}

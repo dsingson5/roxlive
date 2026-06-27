@@ -28,6 +28,9 @@ export function HistoryModal({
   onDelete,
   onClear,
   onReanalyze,
+  onAiAnalyzeAll,
+  aiBulk,
+  hasApiKey,
 }: {
   open: boolean;
   sessions: SessionSummary[];
@@ -44,9 +47,16 @@ export function HistoryModal({
   /** recompute derived analytics (load/EF/durability…) for every saved session;
    *  returns the count reanalyzed. */
   onReanalyze?: () => number;
+  /** run the Claude coach over every session that has no note yet */
+  onAiAnalyzeAll?: () => void;
+  /** live progress of the bulk AI run */
+  aiBulk?: { done: number; total: number; failed: number; running: boolean } | null;
+  /** whether an Anthropic API key is configured */
+  hasApiKey?: boolean;
 }) {
   const [filter, setFilter] = useState<Modality | "all">("all");
   const [reMsg, setReMsg] = useState<string | null>(null);
+  const aiTodo = useMemo(() => sessions.filter((s) => !s.coachNote && (s.avgHr != null || s.distanceM > 0)).length, [sessions]);
 
   // Modalities actually present in saved sessions (for the filter chips).
   const present = useMemo(() => {
@@ -128,6 +138,33 @@ export function HistoryModal({
               </button>
             )}
             {reMsg && <div className="text-[12px] text-[var(--color-volt)] text-center mt-2">{reMsg}</div>}
+
+            {sessions.length > 0 && onAiAnalyzeAll && (
+              <button
+                onClick={() => {
+                  if (!hasApiKey) return;
+                  if (aiBulk?.running) return;
+                  if (aiTodo === 0) { onAiAnalyzeAll(); return; }
+                  if (window.confirm(`Run the Claude AI coach on ${aiTodo} workout${aiTodo === 1 ? "" : "s"}? This makes ${aiTodo} request${aiTodo === 1 ? "" : "s"} on your Anthropic API key.`)) onAiAnalyzeAll();
+                }}
+                disabled={!hasApiKey || aiBulk?.running}
+                className="btn-ghost w-full h-10 mt-3 text-[13px] disabled:opacity-50"
+                style={{ color: "var(--color-volt)", borderColor: "rgba(124,109,242,0.4)" }}
+                title={hasApiKey ? "Run Claude over every workout without a coach note yet" : "Add your Anthropic API key in Settings first"}
+              >
+                {aiBulk?.running
+                  ? `🧠 Analyzing ${aiBulk.done}/${aiBulk.total}…`
+                  : hasApiKey
+                    ? aiTodo > 0 ? `🧠 AI-analyze all (${aiTodo} to do)` : "🧠 All workouts AI-analyzed"
+                    : "🧠 AI-analyze all — add API key in Settings"}
+              </button>
+            )}
+            {aiBulk && !aiBulk.running && aiBulk.total > 0 && (
+              <div className="text-[12px] text-[var(--color-volt)] text-center mt-2">✓ AI-analyzed {aiBulk.done}/{aiBulk.total}{aiBulk.failed ? ` · ${aiBulk.failed} failed` : ""}</div>
+            )}
+            {aiBulk && !aiBulk.running && aiBulk.total === 0 && (
+              <div className="text-[12px] text-[var(--color-ink-faint)] text-center mt-2">All workouts already have an AI note.</div>
+            )}
 
             {sessions.length > 0 && (
               <button
