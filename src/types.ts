@@ -337,6 +337,37 @@ export interface RpeLog {
   perSegment?: Record<number, number>;
 }
 
+/** Derived post-run analytics (training load, efficiency, durability, etc.). */
+export interface PostRunAnalytics {
+  tss?: number; // hrTSS (100 = one hour at threshold)
+  trimp?: number; // Banister TRIMP
+  trimpEdwards?: number;
+  lthr?: number; // threshold HR used for the load calc
+  ef?: number; // efficiency factor (km/h per bpm, or 1000/HR proxy)
+  efMode?: "speed" | "hr";
+  cardiacCostBpkm?: number; // beats per km
+  cardiacRisePct?: number | null;
+  intensity?: { pctMax: number; pctHrr: number | null; zone: string };
+  decouplingClass?: string;
+  durabilityMin?: number | null; // point-of-no-return, minutes into the effort
+  durabilityConf?: "low" | "medium" | "high";
+  efDecayPctPerHr?: number; // EF degradation rate
+  efDecayR2?: number;
+  warmupEndSec?: number;
+  paceCvPct?: number;
+  negativeSplit?: boolean;
+  fastestKm?: number;
+  slowestKm?: number;
+  lt1Hr?: number;
+  lt1PctBelow?: number; // % of time below LT1 (easy)
+  lt1Source?: "alpha1" | "maxhr";
+  respDriftPct?: number | null;
+  respRrHrRatio?: number | null;
+  strideM?: number;
+  strideChangePct?: number | null;
+  refuel?: { carbGLo: number; carbGHi: number; riceCupsLo: number; riceCupsHi: number; bananasLo: number; bananasHi: number };
+}
+
 export interface SessionSummary {
   id: string;
   startedAt: number;
@@ -373,6 +404,8 @@ export interface SessionSummary {
   recovery?: RecoveryResult;
   /** Claude's post-run analysis + recovery guidance (saved once generated). */
   coachNote?: string;
+  /** derived sports-science analytics (ported from MBP-beta); computed at finalize. */
+  analytics?: PostRunAnalytics;
   segments: SegmentRecord[];
   /** downsampled series for the summary chart (~1 point / 5 s) */
   series: SeriesPoint[];

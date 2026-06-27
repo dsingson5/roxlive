@@ -13,6 +13,14 @@
 import type { AthleteProfile, SessionSummary } from "../types";
 import { modalityDef } from "./modality";
 import { fmtClock } from "./format";
+import { COACH_GUIDANCE } from "./analytics/coachFacts";
+
+/** A PMC snapshot (fitness/fatigue/form) the coach can reference. */
+export interface PmcSnap {
+  ctl: number;
+  atl: number;
+  tsb: number;
+}
 
 const ENDPOINT = "https://api.anthropic.com/v1/messages";
 
@@ -24,6 +32,7 @@ const SYSTEM = [
   "Boundaries: you are NOT a medical professional — do not diagnose or give medical advice. If the data looks genuinely concerning (e.g. unusually high HR for the effort, very poor recovery, symptoms), advise consulting a professional. Use the athlete's units (bpm, km, minutes).",
   "Interpretation hints (guidance, not rigid rules): HR decoupling above ~5% can signal fatigue, heat or under-fuelling; DFA alpha-1 dropping well below ~0.75 indicates high strain (around/above threshold); a 1-minute heart-rate-recovery drop above ~25-30 bpm is strong while below ~12 is poor; lots of time in Z4-5 needs more recovery than Z1-2.",
   "Data caveat: this is consumer chest-strap/optical HR, which can throw transient artifacts. Treat a single isolated high reading — especially a peak above the athlete's stated max HR — as a likely sensor glitch, NOT a clinical signal; never imply cardiac danger from one data point. Only suggest seeing a professional for a sustained, plausible pattern.",
+  "\n\n" + COACH_GUIDANCE,
 ].join(" ");
 
 export interface CoachResult {
@@ -67,7 +76,7 @@ export async function readAttachment(file: File): Promise<AttachedFile | { error
 }
 
 /** Build a compact, readable metrics block from the session for the prompt. */
-function dataBlock(s: SessionSummary, p: AthleteProfile): string {
+function dataBlock(s: SessionSummary, p: AthleteProfile, pmc?: PmcSnap | null): string {
   const L: string[] = [];
   L.push(`Athlete: age ${p.age}, max HR ${p.maxHr} bpm, resting HR ${p.restHr} bpm, weight ${p.weightKg} kg.`);
   const type =
@@ -105,6 +114,23 @@ function dataBlock(s: SessionSummary, p: AthleteProfile): string {
   if (segs.length) {
     L.push(`Splits: ${segs.map((x, i) => `${i + 1}) ${x.label} ${fmtClock(x.splitSec as number)}${x.avgHr != null ? ` @ ${Math.round(x.avgHr)} bpm` : ""}`).join("; ")}.`);
   }
+
+  // Derived analytics (ported from the athlete's MBP analyzer).
+  const an = s.analytics;
+  if (an) {
+    if (an.tss != null) L.push(`Training load: hrTSS ${an.tss}${an.trimp != null ? `, TRIMP ${an.trimp}` : ""} (100 = one hour at threshold).`);
+    if (an.ef != null) L.push(`Efficiency factor: ${an.ef} ${an.efMode === "speed" ? "m/min per bpm" : "(1000/HR economy proxy)"}${an.efDecayPctPerHr != null ? `, drifting ${an.efDecayPctPerHr}%/h (R² ${an.efDecayR2})` : ""}.`);
+    if (an.cardiacCostBpkm != null) L.push(`Cardiac cost: ${an.cardiacCostBpkm} beats/km${an.cardiacRisePct != null ? ` (${an.cardiacRisePct >= 0 ? "+" : ""}${an.cardiacRisePct}% 2nd half)` : ""}.`);
+    if (an.intensity) L.push(`Intensity: ${an.intensity.pctMax}% HRmax${an.intensity.pctHrr != null ? `, ${an.intensity.pctHrr}% HRR (Karvonen)` : ""} — ${an.intensity.zone}.`);
+    if (an.decouplingClass) L.push(`Decoupling verdict: ${an.decouplingClass}.`);
+    if (an.durabilityMin != null) L.push(`Durability: efficiency began declining faster at ~${an.durabilityMin} min (${an.durabilityConf} confidence) — the "point of no return".`);
+    if (an.lt1PctBelow != null) L.push(`Polarization: ${an.lt1PctBelow}% of time below LT1 (~${an.lt1Hr} bpm, ${an.lt1Source === "alpha1" ? "DFA-α1 anchored" : "estimated from max HR"}).`);
+    if (an.paceCvPct != null) L.push(`Pacing: ${an.paceCvPct}% pace CV, ${an.negativeSplit ? "negative split" : "positive split"} (fastest km ${an.fastestKm}, slowest km ${an.slowestKm}).`);
+    if (an.strideChangePct != null) L.push(`Stride: ${an.strideM} m, ${an.strideChangePct >= 0 ? "+" : ""}${an.strideChangePct}% across halves${an.strideChangePct <= -3 ? " (late shortening — likely muscular fatigue)" : ""}.`);
+    if (an.respDriftPct != null) L.push(`Breathing drift: ${an.respDriftPct >= 0 ? "+" : ""}${an.respDriftPct}% across halves${an.respRrHrRatio != null ? `, breath/HR ratio ${an.respRrHrRatio}` : ""}.`);
+    if (an.refuel) L.push(`Estimated refuel (≈50% of carbs burned): ${an.refuel.carbGLo}-${an.refuel.carbGHi} g carbs ≈ ${an.refuel.riceCupsLo}-${an.refuel.riceCupsHi} cups cooked rice or ${an.refuel.bananasLo}-${an.refuel.bananasHi} bananas.`);
+  }
+  if (pmc) L.push(`Current training form (PMC): CTL ${pmc.ctl} (fitness), ATL ${pmc.atl} (fatigue), TSB ${pmc.tsb} (form/freshness).`);
   return L.join("\n");
 }
 
@@ -117,12 +143,14 @@ export async function analyzeWorkout(opts: {
   userNote?: string;
   /** optional attachments (images / PDF / text) the athlete added */
   files?: AttachedFile[];
+  /** optional current training form (CTL/ATL/TSB) for cross-session context */
+  pmc?: PmcSnap | null;
 }): Promise<CoachResult> {
   // Build a multimodal user message: a text block (prompt + notes + metrics +
   // any text-file contents) followed by image/PDF content blocks.
   let textPart = "Here is my training session. Give me a short analysis and what to do for recovery.";
   if (opts.userNote?.trim()) textPart += `\n\nMy own notes about how it went: ${opts.userNote.trim()}`;
-  textPart += `\n\n${dataBlock(opts.summary, opts.profile)}`;
+  textPart += `\n\n${dataBlock(opts.summary, opts.profile, opts.pmc)}`;
   for (const f of opts.files ?? []) {
     if (f.kind === "text") textPart += `\n\n[Attached note "${f.name}"]\n${(f.data || "").slice(0, 20000)}`;
   }

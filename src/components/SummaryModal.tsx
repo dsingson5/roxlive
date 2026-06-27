@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { AthleteProfile, RecoverySnap, RpeLog, SeriesPoint, SessionSummary } from "../types";
 import type { PostResult } from "../lib/strava";
-import { analyzeWorkout, readAttachment, type AttachedFile } from "../lib/coach";
+import { analyzeWorkout, readAttachment, type AttachedFile, type PmcSnap } from "../lib/coach";
+import { formLabel } from "../lib/analytics/trainingLoad";
 import { sessionUser } from "../lib/sync";
 import { modalityDef } from "../lib/modality";
 import { Sparkline } from "./Charts";
@@ -26,6 +27,7 @@ export function SummaryModal({
   apiKey,
   model,
   profile,
+  pmc,
   onAnalysis,
   onClose,
 }: {
@@ -56,6 +58,8 @@ export function SummaryModal({
   apiKey?: string;
   model?: string;
   profile?: AthleteProfile;
+  /** current training form (CTL/ATL/TSB) for the session's day */
+  pmc?: PmcSnap | null;
   /** persist Claude's analysis onto the session */
   onAnalysis?: (text: string) => void;
   onClose: () => void;
@@ -208,8 +212,10 @@ export function SummaryModal({
 
               {onFeel && <FeelSection summary={summary} onFeel={onFeel} />}
 
+              {summary.analytics && <SessionAnalytics summary={summary} pmc={pmc} />}
+
               {!recovering && (
-                <CoachAnalysis key={summary.id} summary={summary} apiKey={apiKey} model={model} profile={profile} onAnalysis={onAnalysis} />
+                <CoachAnalysis key={summary.id} summary={summary} apiKey={apiKey} model={model} profile={profile} pmc={pmc} onAnalysis={onAnalysis} />
               )}
 
               {onRpe && <RpeSection summary={summary} onRpe={onRpe} />}
@@ -380,18 +386,66 @@ function buildWorkoutNotes(s: SessionSummary): string {
   return L.join("\n");
 }
 
+/** Derived sports-science analytics (ported from MBP-beta): training load, EF,
+ *  durability, intensity, refuel, plus the cross-session PMC form. */
+function SessionAnalytics({ summary, pmc }: { summary: SessionSummary; pmc?: PmcSnap | null }) {
+  const a = summary.analytics;
+  if (!a) return null;
+  const chips: { label: string; value: string; hint?: string }[] = [];
+  if (a.tss != null) chips.push({ label: "Load · hrTSS", value: String(a.tss), hint: a.trimp != null ? `TRIMP ${a.trimp}` : undefined });
+  if (a.ef != null) chips.push({ label: "Efficiency · EF", value: a.efMode === "speed" ? a.ef.toFixed(2) : a.ef.toFixed(1), hint: a.efMode === "speed" ? "m/min·bpm" : "1000/HR" });
+  if (a.cardiacCostBpkm != null) chips.push({ label: "Cardiac cost", value: String(a.cardiacCostBpkm), hint: "beats/km" });
+  if (a.intensity) chips.push({ label: "Intensity", value: a.intensity.zone, hint: `${a.intensity.pctMax}% max${a.intensity.pctHrr != null ? ` · ${a.intensity.pctHrr}% HRR` : ""}` });
+  if (a.lt1PctBelow != null) chips.push({ label: "Easy · sub-LT1", value: `${a.lt1PctBelow}%`, hint: `LT1 ~${a.lt1Hr} bpm` });
+  if (a.paceCvPct != null) chips.push({ label: "Pace CV", value: `${a.paceCvPct}%`, hint: a.negativeSplit ? "negative split" : "positive split" });
+  if (a.efDecayPctPerHr != null) chips.push({ label: "EF drift", value: `${a.efDecayPctPerHr}%/h` });
+  if (a.strideM != null) chips.push({ label: "Stride", value: `${a.strideM} m`, hint: a.strideChangePct != null ? `${a.strideChangePct >= 0 ? "+" : ""}${a.strideChangePct}% halves` : undefined });
+
+  return (
+    <div className="card p-4 mb-4">
+      <div className="card-title mb-2">📊 Session analytics</div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {chips.map((c, i) => (
+          <div key={i} className="rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-line)] px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wide text-[var(--color-ink-faint)]">{c.label}</div>
+            <div className="text-[15px] font-bold text-[var(--color-ink)] leading-tight">{c.value}</div>
+            {c.hint && <div className="text-[10px] text-[var(--color-ink-dim)]">{c.hint}</div>}
+          </div>
+        ))}
+      </div>
+      {a.decouplingClass && (
+        <div className="text-[12px] text-[var(--color-ink-dim)] mt-2">Decoupling: <span className="text-[var(--color-ink)]">{a.decouplingClass}</span></div>
+      )}
+      {a.durabilityMin != null && (
+        <div className="text-[12px] text-[var(--color-ink-dim)] mt-1">Durability: efficiency bent down at <span className="text-[var(--color-ink)]">~{a.durabilityMin} min</span> ({a.durabilityConf} confidence)</div>
+      )}
+      {a.refuel && (
+        <div className="text-[12px] text-[var(--color-ink-dim)] mt-1">Refuel: <span className="text-[var(--color-ink)]">{a.refuel.carbGLo}–{a.refuel.carbGHi} g carbs</span> ≈ {a.refuel.riceCupsLo}–{a.refuel.riceCupsHi} cups rice or {a.refuel.bananasLo}–{a.refuel.bananasHi} 🍌</div>
+      )}
+      {pmc && (
+        <div className="text-[12px] text-[var(--color-ink-dim)] mt-2 pt-2 border-t border-[var(--color-line)]">
+          Form: <span className="text-[var(--color-ink)]">CTL {pmc.ctl}</span> <span className="text-[var(--color-ink-faint)]">(fitness)</span> · ATL {pmc.atl} <span className="text-[var(--color-ink-faint)]">(fatigue)</span> · <span className="text-[var(--color-volt)]">TSB {pmc.tsb} — {formLabel(pmc.tsb)}</span>
+        </div>
+      )}
+      <div className="text-[10px] text-[var(--color-ink-faint)] mt-2">Training-load, efficiency &amp; durability analytics — general guidance, not medical advice.</div>
+    </div>
+  );
+}
+
 /** Post-run AI analysis: Claude's read of the session + recovery guidance. */
 function CoachAnalysis({
   summary,
   apiKey,
   model,
   profile,
+  pmc,
   onAnalysis,
 }: {
   summary: SessionSummary;
   apiKey?: string;
   model?: string;
   profile?: AthleteProfile;
+  pmc?: PmcSnap | null;
   onAnalysis?: (text: string) => void;
 }) {
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
@@ -423,7 +477,7 @@ function CoachAnalysis({
     if (!apiKey || !profile) return;
     setState("loading");
     setMsg(null);
-    const r = await analyzeWorkout({ summary, profile, apiKey, model: model || "claude-sonnet-4-6", userNote, files });
+    const r = await analyzeWorkout({ summary, profile, apiKey, model: model || "claude-sonnet-4-6", userNote, files, pmc });
     if (r.ok && r.text) {
       onAnalysis?.(r.text);
       setState("idle");

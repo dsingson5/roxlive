@@ -28,6 +28,8 @@ import { addToHistory, clearHistory, deleteFromHistory, loadHistory, pullAndMerg
 import { resolveCrewUser, prettyUser, calendarPageFor } from "./lib/user";
 import { takeIncoming, incomingToPlan, selfTestCalendarImport } from "./lib/calendarImport";
 import { selfTestRepForm } from "./lib/repForm";
+import { analyzeSession } from "./lib/analytics";
+import { computePmc, dailyTssDense, type PmcPoint } from "./lib/analytics/trainingLoad";
 import { selfTestStrengthHistory } from "./lib/strengthHistory";
 import { getDeviceName, setDeviceName, defaultDeviceName, resolveDeviceLabel } from "./lib/deviceNames";
 import { CalendarPicker } from "./components/CalendarPicker";
@@ -155,6 +157,22 @@ export default function App() {
   const [history, setHistory] = useState<SessionSummary[]>(() => loadHistory());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyDetail, setHistoryDetail] = useState<SessionSummary | null>(null);
+
+  // Performance Management Chart (CTL/ATL/TSB) over saved history — Manila days,
+  // rest days gap-filled to 0 so the EWMA decay is correct.
+  const pmcSeries = useMemo<PmcPoint[]>(() => {
+    const items = history
+      .map((s) => ({ dateIso: manilaDayIso(s.endedAt || s.startedAt), tss: s.analytics?.tss ?? 0 }))
+      .filter((x) => !!x.dateIso && x.tss > 0);
+    if (items.length < 2) return [];
+    return computePmc(dailyTssDense(items));
+  }, [history]);
+  const pmcFor = (s: SessionSummary | null): { ctl: number; atl: number; tsb: number } | null => {
+    if (!s || !pmcSeries.length) return null;
+    const day = manilaDayIso(s.endedAt || s.startedAt);
+    const pt = [...pmcSeries].reverse().find((p) => p.date <= day) ?? pmcSeries[pmcSeries.length - 1];
+    return pt ? { ctl: pt.ctl, atl: pt.atl, tsb: pt.tsb } : null;
+  };
 
   // Cross-device sync: a signed-in athlete's history follows them to any device.
   // Auth is a real password (server-verified) → a signed session token.
@@ -798,6 +816,11 @@ export default function App() {
     // Keep the source plan with the session so the user can repeat this exact
     // workout later (workout = the built/imported plan; hyrox = the race plan).
     s.plan = raceMode === "workout" ? plan ?? undefined : raceMode === "hyrox" ? hyroxPlan : undefined;
+    // Derived sports-science analytics (training load, EF, durability, …) ported
+    // from MBP-beta — computed from the full 1 Hz series before it's downsampled.
+    try {
+      s.analytics = analyzeSession(s, series, { maxHr: profile.maxHr, restHr: profile.restHr, weightKg: profile.weightKg, age: profile.age });
+    } catch { /* analytics are best-effort */ }
     fullSeriesRef.current = [...series];
     if (startTimerRef.current) { clearTimeout(startTimerRef.current); startTimerRef.current = null; }
     setStartCountdown(null);
@@ -1113,6 +1136,7 @@ export default function App() {
         apiKey={apiKey}
         model={visionModel}
         profile={profile}
+        pmc={pmcFor(summary)}
         onAnalysis={(text) => {
           if (!summary) return;
           setSummary({ ...summary, coachNote: text });
@@ -1151,6 +1175,7 @@ export default function App() {
         apiKey={apiKey}
         model={visionModel}
         profile={profile}
+        pmc={pmcFor(historyDetail)}
         onAnalysis={(text) => {
           if (!historyDetail) return;
           setHistoryDetail({ ...historyDetail, coachNote: text });
@@ -1439,6 +1464,20 @@ function planFromSession(s: SessionSummary): WorkoutPlan | null {
     intervals,
     modality: s.modality,
   };
+}
+
+/** Calendar day (YYYY-MM-DD) for a timestamp in Manila time — matches the hub
+ *  pages' day bucketing so PMC/training-load align across the apps. */
+function manilaDayIso(ms: number): string {
+  if (!ms) return "";
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(ms));
+    const o: Record<string, string> = {};
+    parts.forEach((p) => (o[p.type] = p.value));
+    return o.year && o.month && o.day ? `${o.year}-${o.month}-${o.day}` : "";
+  } catch {
+    return "";
+  }
 }
 
 function buildSummary(
