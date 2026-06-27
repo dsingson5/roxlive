@@ -27,6 +27,7 @@ export function HistoryModal({
   onRepeat,
   onDelete,
   onClear,
+  onReanalyze,
 }: {
   open: boolean;
   sessions: SessionSummary[];
@@ -40,8 +41,12 @@ export function HistoryModal({
   onRepeat: (s: SessionSummary) => void;
   onDelete: (id: string) => void;
   onClear: () => void;
+  /** recompute derived analytics (load/EF/durability…) for every saved session;
+   *  returns the count reanalyzed. */
+  onReanalyze?: () => number;
 }) {
   const [filter, setFilter] = useState<Modality | "all">("all");
+  const [reMsg, setReMsg] = useState<string | null>(null);
 
   // Modalities actually present in saved sessions (for the filter chips).
   const present = useMemo(() => {
@@ -109,10 +114,25 @@ export function HistoryModal({
               </div>
             )}
 
+            {sessions.length > 0 && onReanalyze && (
+              <button
+                onClick={() => {
+                  const n = onReanalyze();
+                  setReMsg(`✓ Recomputed analytics for ${n} workout${n === 1 ? "" : "s"}`);
+                  window.setTimeout(() => setReMsg(null), 3500);
+                }}
+                className="btn-ghost w-full h-10 mt-5 text-[13px]"
+                title="Recompute training load, EF, durability, etc. for every saved session"
+              >
+                ↻ Reanalyze all workouts
+              </button>
+            )}
+            {reMsg && <div className="text-[12px] text-[var(--color-volt)] text-center mt-2">{reMsg}</div>}
+
             {sessions.length > 0 && (
               <button
                 onClick={onClear}
-                className="btn-ghost w-full h-10 mt-5 text-[13px]"
+                className="btn-ghost w-full h-10 mt-3 text-[13px]"
                 style={{ color: "var(--color-red)", borderColor: "rgba(255,77,77,0.3)" }}
               >
                 Clear all history

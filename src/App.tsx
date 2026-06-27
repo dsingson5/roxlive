@@ -24,7 +24,7 @@ import { selfTestDFA } from "./lib/dfa";
 import { clonePlan, cumulativeEnds, loadPlan, resolveBand, samplePlans, savePlan } from "./lib/workout";
 import { VISION_MODELS } from "./lib/vision";
 import { VoiceCoach } from "./lib/voice";
-import { addToHistory, clearHistory, deleteFromHistory, loadHistory, pullAndMerge, updateHistory } from "./lib/history";
+import { addToHistory, clearHistory, deleteFromHistory, loadHistory, pullAndMerge, updateHistory, replaceHistory } from "./lib/history";
 import { resolveCrewUser, prettyUser, calendarPageFor } from "./lib/user";
 import { takeIncoming, incomingToPlan, selfTestCalendarImport } from "./lib/calendarImport";
 import { selfTestRepForm } from "./lib/repForm";
@@ -172,6 +172,24 @@ export default function App() {
     const day = manilaDayIso(s.endedAt || s.startedAt);
     const pt = [...pmcSeries].reverse().find((p) => p.date <= day) ?? pmcSeries[pmcSeries.length - 1];
     return pt ? { ctl: pt.ctl, atl: pt.atl, tsb: pt.tsb } : null;
+  };
+  // Recompute the derived analytics (training load / EF / durability / …) for every
+  // saved session and persist+sync — backfills past workouts (and applies the latest
+  // algorithms) so the analytics card, PMC and the hub feed work retroactively.
+  const reanalyzeAll = (): number => {
+    const prof = { maxHr: profile.maxHr, restHr: profile.restHr, weightKg: profile.weightKg, age: profile.age };
+    let n = 0;
+    const updated = loadHistory().map((s) => {
+      try {
+        const analytics = analyzeSession(s, s.series || [], prof);
+        n++;
+        return { ...s, analytics };
+      } catch {
+        return s;
+      }
+    });
+    setHistory(replaceHistory(updated));
+    return n;
   };
 
   // Cross-device sync: a signed-in athlete's history follows them to any device.
@@ -1205,6 +1223,7 @@ export default function App() {
         onRepeat={repeatSession}
         onDelete={(id) => setHistory(deleteFromHistory(id))}
         onClear={() => setHistory(clearHistory())}
+        onReanalyze={reanalyzeAll}
       />
 
       {/* Form Lab — camera-based cadence & running form (lazy-loaded). */}
