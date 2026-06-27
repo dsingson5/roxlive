@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { AthleteProfile, RecoverySnap, RpeLog, SeriesPoint, SessionSummary } from "../types";
 import type { PostResult } from "../lib/strava";
-import { analyzeWorkout } from "../lib/coach";
+import { analyzeWorkout, readAttachment, type AttachedFile } from "../lib/coach";
+import { sessionUser } from "../lib/sync";
 import { modalityDef } from "../lib/modality";
 import { Sparkline } from "./Charts";
 import { ZONE_DEFS } from "../lib/zones";
@@ -395,14 +396,34 @@ function CoachAnalysis({
 }) {
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
   const [msg, setMsg] = useState<string | null>(null);
+  const [userNote, setUserNote] = useState("");
+  const [files, setFiles] = useState<AttachedFile[]>([]);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const note = summary.coachNote;
   const hasData = summary.avgHr != null || summary.distanceM > 0;
+  const canAnalyze = !!apiKey && !!profile && hasData;
+
+  const addFiles = async (list: FileList | null) => {
+    if (!list?.length) return;
+    setMsg(null);
+    const picked = Array.from(list);
+    const next: AttachedFile[] = [];
+    for (const f of picked) {
+      if (files.length + next.length >= 6) { setMsg("Up to 6 files per analysis."); break; }
+      const r = await readAttachment(f);
+      if ("error" in r) { setMsg(r.error); continue; }
+      next.push(r);
+    }
+    if (next.length) setFiles((prev) => [...prev, ...next]);
+    if (fileRef.current) fileRef.current.value = ""; // allow re-picking the same file
+  };
+  const removeFile = (i: number) => setFiles((prev) => prev.filter((_, idx) => idx !== i));
 
   const run = async () => {
     if (!apiKey || !profile) return;
     setState("loading");
     setMsg(null);
-    const r = await analyzeWorkout({ summary, profile, apiKey, model: model || "claude-sonnet-4-6" });
+    const r = await analyzeWorkout({ summary, profile, apiKey, model: model || "claude-sonnet-4-6", userNote, files });
     if (r.ok && r.text) {
       onAnalysis?.(r.text);
       setState("idle");
@@ -412,30 +433,57 @@ function CoachAnalysis({
     }
   };
 
+  // Notes + attachments composer (shown whenever an analysis can run).
+  const composer = canAnalyze && (
+    <div className="mt-3">
+      <textarea
+        value={userNote}
+        onChange={(e) => setUserNote(e.target.value)}
+        placeholder="Add context for Claude (optional) — how you felt, sleep, soreness, weather, fuelling…"
+        rows={2}
+        className="w-full rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-line)] px-3 py-2 text-[13px] text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] resize-y"
+      />
+      <div className="flex flex-wrap items-center gap-2 mt-2">
+        <button onClick={() => fileRef.current?.click()} className="btn-ghost h-8 px-3 text-[12px]">📎 Attach files</button>
+        <input ref={fileRef} type="file" multiple accept="image/*,application/pdf,.txt,.md,.csv,.json,.log" className="hidden" onChange={(e) => addFiles(e.target.files)} />
+        <span className="text-[10px] text-[var(--color-ink-faint)]">Photos, PDFs or notes (e.g. meal, sleep, course) — up to 6</span>
+      </div>
+      {files.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {files.map((f, i) => (
+            <span key={i} className="inline-flex items-center gap-1 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-line)] px-2 py-1 text-[11px] text-[var(--color-ink-dim)]">
+              {f.kind === "image" ? "🖼" : f.kind === "pdf" ? "📄" : "📝"} <span className="max-w-[140px] truncate">{f.name}</span>
+              <button onClick={() => removeFile(i)} className="text-[var(--color-ink-faint)] hover:text-[var(--color-red)]" title="Remove">×</button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="card p-4 mb-4" style={{ borderColor: "rgba(124,109,242,0.35)" }}>
       <div className="card-title mb-1">🧠 Coach analysis</div>
       <div className="text-[10px] text-[var(--color-ink-faint)] mb-2">AI training guidance from your run data — general advice, not medical advice.</div>
-      {note ? (
-        <>
-          <div className="text-[13px] text-[var(--color-ink-dim)] whitespace-pre-wrap leading-relaxed">{note}</div>
-          <button onClick={run} disabled={state === "loading" || !hasData} className="btn-ghost h-8 px-3 mt-3 text-[12px] disabled:opacity-50">
-            {state === "loading" ? "Analyzing…" : "↻ Re-analyze"}
-          </button>
-        </>
-      ) : !apiKey ? (
+      {note && <div className="text-[13px] text-[var(--color-ink-dim)] whitespace-pre-wrap leading-relaxed mb-1">{note}</div>}
+      {note && sessionUser() === "david" && (
+        <div className="text-[11px] text-[var(--color-volt)] mb-1">✓ Saved to your Year Calendar &amp; Training Progress pages.</div>
+      )}
+      {!apiKey ? (
         <div className="text-[12px] text-[var(--color-ink-dim)]">Add your Anthropic API key in Settings to get Claude's read of this run and what to do for recovery.</div>
       ) : !hasData ? (
         <div className="text-[12px] text-[var(--color-ink-faint)]">Not enough data to analyze.</div>
       ) : (
         <>
-          <div className="text-[12px] text-[var(--color-ink-dim)] mb-2">Get Claude's read of this session and what to do for recovery next.</div>
-          <button onClick={run} disabled={state === "loading"} className="btn-volt h-10 px-4 text-sm font-semibold disabled:opacity-50">
-            {state === "loading" ? "Analyzing your run…" : "✨ Analyze with Claude"}
+          {!note && <div className="text-[12px] text-[var(--color-ink-dim)]">Get Claude's read of this session and what to do for recovery next.</div>}
+          {composer}
+          <button onClick={run} disabled={state === "loading"} className={`${note ? "btn-ghost h-8 px-3 text-[12px]" : "btn-volt h-10 px-4 text-sm font-semibold"} mt-3 disabled:opacity-50`}>
+            {state === "loading" ? "Analyzing…" : note ? "↻ Re-analyze" : "✨ Analyze with Claude"}
           </button>
         </>
       )}
       {state === "error" && msg && <div className="text-[11px] text-[var(--color-red)] mt-2">{msg}</div>}
+      {state !== "error" && msg && <div className="text-[11px] text-[var(--color-amber,#f59e0b)] mt-2">{msg}</div>}
     </div>
   );
 }

@@ -20,6 +20,7 @@ const SYSTEM = [
   "You are an experienced endurance and strength coach. After a single training session you give the athlete a concise, practical read of it, using only the data provided.",
   "Cover two things: (1) a short assessment of the session — intensity and zone distribution, aerobic durability (from HR decoupling and DFA alpha-1) and, if present, recovery quality (from heart-rate recovery); (2) prioritized RECOVERY actions for the next 24-48 hours — fuelling, hydration, sleep, mobility/active-recovery vs full rest, and when + how hard to train next.",
   "Style: be specific to the numbers, brief (a few short sections with bullet points, not an essay), encouraging but honest.",
+  "The athlete may add their own notes and attach files (e.g. a photo of a meal, a screenshot of sleep/HRV/weather, a course profile, or a note on how they feel). When provided, factor them into your read and recommendations; if a file isn't relevant to training/recovery, say so briefly and move on.",
   "Boundaries: you are NOT a medical professional — do not diagnose or give medical advice. If the data looks genuinely concerning (e.g. unusually high HR for the effort, very poor recovery, symptoms), advise consulting a professional. Use the athlete's units (bpm, km, minutes).",
   "Interpretation hints (guidance, not rigid rules): HR decoupling above ~5% can signal fatigue, heat or under-fuelling; DFA alpha-1 dropping well below ~0.75 indicates high strain (around/above threshold); a 1-minute heart-rate-recovery drop above ~25-30 bpm is strong while below ~12 is poor; lots of time in Z4-5 needs more recovery than Z1-2.",
   "Data caveat: this is consumer chest-strap/optical HR, which can throw transient artifacts. Treat a single isolated high reading — especially a peak above the athlete's stated max HR — as a likely sensor glitch, NOT a clinical signal; never imply cardiac danger from one data point. Only suggest seeing a professional for a sustained, plausible pattern.",
@@ -29,6 +30,40 @@ export interface CoachResult {
   ok: boolean;
   text?: string;
   error?: string;
+}
+
+/** A file the athlete attached to the analysis (image/PDF base64, or raw text). */
+export interface AttachedFile {
+  name: string;
+  kind: "image" | "pdf" | "text";
+  mediaType: string; // e.g. "image/jpeg", "application/pdf", "text/plain"
+  data: string; // base64 for image/pdf; raw text for text
+}
+
+/** Read a picked File into an {@link AttachedFile}, or return an error string. */
+export async function readAttachment(file: File): Promise<AttachedFile | { error: string }> {
+  const MAX = 10 * 1024 * 1024; // 10 MB per file
+  if (file.size > MAX) return { error: `${file.name} is too large (max 10 MB).` };
+  const isImg = file.type.startsWith("image/");
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  const isText = file.type.startsWith("text/") || /\.(txt|md|csv|json|log)$/i.test(file.name);
+  return new Promise((resolve) => {
+    const r = new FileReader();
+    r.onerror = () => resolve({ error: `Couldn't read ${file.name}.` });
+    if (isImg || isPdf) {
+      r.onload = () => {
+        const s = String(r.result || "");
+        const b64 = s.includes(",") ? s.slice(s.indexOf(",") + 1) : s;
+        resolve({ name: file.name, kind: isImg ? "image" : "pdf", mediaType: isImg ? file.type || "image/jpeg" : "application/pdf", data: b64 });
+      };
+      r.readAsDataURL(file);
+    } else if (isText) {
+      r.onload = () => resolve({ name: file.name, kind: "text", mediaType: "text/plain", data: String(r.result || "") });
+      r.readAsText(file);
+    } else {
+      resolve({ error: `${file.name}: unsupported type (use an image, PDF, or text file).` });
+    }
+  });
 }
 
 /** Build a compact, readable metrics block from the session for the prompt. */
@@ -78,17 +113,30 @@ export async function analyzeWorkout(opts: {
   profile: AthleteProfile;
   apiKey: string;
   model: string;
+  /** optional free-text the athlete typed before analyzing */
+  userNote?: string;
+  /** optional attachments (images / PDF / text) the athlete added */
+  files?: AttachedFile[];
 }): Promise<CoachResult> {
+  // Build a multimodal user message: a text block (prompt + notes + metrics +
+  // any text-file contents) followed by image/PDF content blocks.
+  let textPart = "Here is my training session. Give me a short analysis and what to do for recovery.";
+  if (opts.userNote?.trim()) textPart += `\n\nMy own notes about how it went: ${opts.userNote.trim()}`;
+  textPart += `\n\n${dataBlock(opts.summary, opts.profile)}`;
+  for (const f of opts.files ?? []) {
+    if (f.kind === "text") textPart += `\n\n[Attached note "${f.name}"]\n${(f.data || "").slice(0, 20000)}`;
+  }
+  const content: Record<string, unknown>[] = [{ type: "text", text: textPart }];
+  for (const f of opts.files ?? []) {
+    if (f.kind === "image") content.push({ type: "image", source: { type: "base64", media_type: f.mediaType, data: f.data } });
+    else if (f.kind === "pdf") content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: f.data } });
+  }
+
   const body = {
     model: opts.model,
-    max_tokens: 1100,
+    max_tokens: 1200,
     system: SYSTEM,
-    messages: [
-      {
-        role: "user",
-        content: `Here is my training session. Give me a short analysis and what to do for recovery.\n\n${dataBlock(opts.summary, opts.profile)}`,
-      },
-    ],
+    messages: [{ role: "user", content }],
   };
 
   let res: Response;

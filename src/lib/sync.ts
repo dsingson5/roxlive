@@ -342,11 +342,18 @@ export function mergeTombstones(a: Tombstones = {}, b: Tombstones = {}): Tombsto
 }
 
 function richer(x: SessionSummary, y: SessionSummary): SessionSummary {
-  // Non-RPE fields are set at session creation and identical across devices, so
-  // the base pick is cosmetic; RPE is the only post-hoc-edited field, merged below.
+  // Most fields are set at session creation and identical across devices, so the
+  // base pick is cosmetic. RPE / feel / the AI coach note are edited post-hoc on
+  // one device, so keep whichever copy carries them (mirrors sync/worker.js).
   const base = (y.endedAt || 0) >= (x.endedAt || 0) ? y : x;
   const rpe = mergeRpe(x.rpe, y.rpe);
-  return rpe ? { ...base, rpe } : base;
+  const coachNote = base.coachNote || x.coachNote || y.coachNote;
+  const feel = base.feel || x.feel || y.feel;
+  const out: SessionSummary = { ...base };
+  if (rpe) out.rpe = rpe;
+  if (coachNote) out.coachNote = coachNote;
+  if (feel) out.feel = feel;
+  return out;
 }
 
 function mergeRpe(a: RpeLog | undefined, b: RpeLog | undefined): RpeLog | undefined {
