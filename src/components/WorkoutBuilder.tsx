@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ThresholdGuidance } from "./ThresholdGuidance";
 import type {
   AthleteProfile,
   TargetType,
@@ -231,6 +232,10 @@ export function WorkoutBuilder({
                   <input value={draft.title} onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} className="inp flex-1 font-semibold" placeholder="Workout title" />
                   <div className="mono text-[12px] text-[var(--color-ink-dim)] shrink-0">{fmtClock(total)} · {draft.intervals.length} steps</div>
                 </div>
+
+                {/* Threshold / sub-threshold reminder + buy-out menu (title-detected). */}
+                <ThresholdGuidance title={draft.title} />
+
 
                 {/* session type / modality */}
                 <div className="rounded-xl bg-white/[0.025] border border-[var(--color-line)] p-2.5 mb-3">

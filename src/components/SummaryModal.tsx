@@ -4,6 +4,7 @@ import type { AthleteProfile, RecoverySnap, RpeLog, SeriesPoint, SessionSummary 
 import type { PostResult } from "../lib/strava";
 import { analyzeWorkout, readAttachment, type AttachedFile, type PmcSnap } from "../lib/coach";
 import { formLabel } from "../lib/analytics/trainingLoad";
+import { ThresholdGuidance } from "./ThresholdGuidance";
 import { sessionUser } from "../lib/sync";
 import { modalityDef } from "../lib/modality";
 import { Sparkline } from "./Charts";
@@ -211,6 +212,8 @@ export function SummaryModal({
               )}
 
               {onFeel && <FeelSection summary={summary} onFeel={onFeel} />}
+
+              <ThresholdGuidance title={summary.planTitle || summary.plan?.title} />
 
               {summary.analytics && <SessionAnalytics summary={summary} pmc={pmc} />}
 
