@@ -317,14 +317,51 @@ function stripDate(title: string): string {
   return parts.filter((p) => !isDateSeg(p)).join(" · "); // "" if the title was only a date → caller falls back
 }
 
-/** Branded default title for a Strava upload, tailored to the session type. */
+/** Clean default title for a Strava upload — just the workout, no branding
+ *  (the brand lives in the Description; full detail goes in Private Notes). */
 function stravaDefaultName(summary: SessionSummary): string {
-  const brand = "RoxLive by Hybrid Crew";
-  if (summary.mode === "hyrox") return `HYROX · ${brand}`;
-  if (summary.mode === "workout") return `${stripDate(summary.planTitle?.trim() || "") || "Workout"} · ${brand}`;
+  if (summary.mode === "hyrox") return "HYROX";
+  if (summary.mode === "workout") return stripDate(summary.planTitle?.trim() || "") || "Workout";
   // Free session — name it after the sport when we know it.
   const sport = summary.modality && summary.modality !== "mixed" ? modalityDef(summary.modality).label : null;
-  return sport ? `${sport} · ${brand}` : `${brand} session`;
+  return sport ? `${sport} session` : "Workout";
+}
+
+/** A full, copy-pasteable workout breakdown for Strava's Private Notes (the API
+ *  can't write Private Notes, so we surface it for a one-tap copy + manual paste). */
+function buildWorkoutNotes(s: SessionSummary): string {
+  const title = s.mode === "hyrox" ? "HYROX simulation" : s.mode === "workout" ? stripDate(s.planTitle?.trim() || "") || "Guided workout" : "Free session";
+  const L: string[] = [`${title} — ${fmtClock(s.activeSec ?? s.durationSec)} active`];
+  const a: string[] = [];
+  if (s.avgHr != null) a.push(`avg HR ${Math.round(s.avgHr)}`);
+  if (s.maxHr != null) a.push(`max HR ${Math.round(s.maxHr)}`);
+  if (s.distanceM > 0) a.push(fmtDist(s.distanceM));
+  if (s.kcal) a.push(`${Math.round(s.kcal)} kcal`);
+  if (a.length) L.push(a.join(" · "));
+  const b: string[] = [];
+  if (s.adherencePct != null) b.push(`target adherence ${Math.round(s.adherencePct)}%`);
+  if (s.decouplingPct != null) b.push(`decoupling ${fmtSigned(s.decouplingPct, 1)}%`);
+  if (s.minAlpha1 != null) b.push(`min α1 ${s.minAlpha1.toFixed(2)}`);
+  if (s.avgBrpm != null) b.push(`avg breath ${Math.round(s.avgBrpm)}/min`);
+  if (b.length) L.push(b.join(" · "));
+  const r = s.recovery;
+  if (r && (r.hrr30 != null || r.hrr60 != null)) {
+    const p: string[] = [];
+    if (r.hrr30 != null) p.push(`−${r.hrr30} bpm @30s`);
+    if (r.hrr60 != null) p.push(`−${r.hrr60} bpm @1min`);
+    L.push(`Recovery HR: ${p.join(", ")} (peak ${r.peakHr})`);
+  }
+  const segs = (s.segments ?? []).filter((x) => x.splitSec != null);
+  if (segs.length) {
+    L.push("", "Splits:");
+    segs.forEach((x, i) => {
+      const hr = x.avgHr != null ? ` · avg ${Math.round(x.avgHr)}${x.maxHr != null ? `/max ${Math.round(x.maxHr)}` : ""}` : "";
+      const d = x.distanceM > 0 ? ` · ${fmtDist(x.distanceM)}` : "";
+      L.push(`${i + 1}. ${x.label} — ${fmtClock(x.splitSec as number)}${hr}${d}`);
+    });
+  }
+  L.push("", "Recorded with RoxLive by Hybrid Crew");
+  return L.join("\n");
 }
 
 function StravaPost({
@@ -342,6 +379,11 @@ function StravaPost({
   const [desc, setDesc] = useState("RoxLive by Hybrid Crew");
   const [state, setState] = useState<"idle" | "posting" | "done" | "error">("idle");
   const [msg, setMsg] = useState<string | null>(null);
+  const notes = buildWorkoutNotes(summary);
+  const [copied, setCopied] = useState(false);
+  const copyNotes = async () => {
+    try { await navigator.clipboard.writeText(notes); setCopied(true); window.setTimeout(() => setCopied(false), 2500); } catch { /* clipboard blocked */ }
+  };
 
   const go = async () => {
     setState("posting");
@@ -380,8 +422,24 @@ function StravaPost({
   return (
     <div className="card p-4 mt-4" style={{ borderColor: "rgba(252,76,2,0.4)" }}>
       <div className="card-title mb-2" style={{ color: "#fc4c02" }}>Post to Strava — confirm</div>
-      <input value={name} onChange={(e) => setName(e.target.value)} className="inp mb-2" placeholder="Activity name" />
-      <input value={desc} onChange={(e) => setDesc(e.target.value)} className="inp" placeholder="Description" />
+      <label className="text-[10px] tracking-[0.1em] uppercase text-[var(--color-ink-faint)]">Title</label>
+      <input value={name} onChange={(e) => setName(e.target.value)} className="inp mb-2 mt-1" placeholder="Activity name" />
+      <label className="text-[10px] tracking-[0.1em] uppercase text-[var(--color-ink-faint)]">Description</label>
+      <input value={desc} onChange={(e) => setDesc(e.target.value)} className="inp mt-1" placeholder="Description" />
+
+      {/* Full breakdown for Private Notes — Strava's API can't write Private Notes,
+          so copy this and paste it into the activity's Private Notes on Strava. */}
+      <div className="mt-3 rounded-xl bg-white/[0.025] border border-[var(--color-line)] p-2.5">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[10px] tracking-[0.1em] uppercase text-[var(--color-ink-faint)]">Private notes (full detail)</span>
+          <button onClick={copyNotes} className="btn-ghost h-7 px-3 text-[11px]" style={copied ? { borderColor: "var(--color-mint)", color: "var(--color-mint)" } : undefined}>
+            {copied ? "Copied ✓" : "Copy"}
+          </button>
+        </div>
+        <pre className="text-[11px] text-[var(--color-ink-dim)] whitespace-pre-wrap font-sans max-h-32 overflow-y-auto leading-snug">{notes}</pre>
+        <div className="text-[10px] text-[var(--color-ink-faint)] mt-1.5">Strava's API can't fill Private Notes — paste this into your activity → ⋯ → Edit → Private Notes.</div>
+      </div>
+
       {msg && state === "error" && <div className="text-[11px] text-[var(--color-red)] mt-2">{msg}</div>}
       <div className="flex gap-2 mt-3">
         <button

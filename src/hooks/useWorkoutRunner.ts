@@ -46,10 +46,15 @@ export function useWorkoutRunner(args: {
   const ends = useMemo(() => (plan ? cumulativeEnds(plan) : []), [plan]);
   const leadIn = voice.leadInSec;
 
-  // cue + adherence bookkeeping
+  // cue + adherence bookkeeping. `armed` = HR has first reached the target band
+  // (or the grace cap elapsed) — compliance only counts from that point, so the
+  // HR ramp-up at the start of a hard rep (or settle at the start of a recovery)
+  // isn't scored against you.
   const fired = useRef<Set<string>>(new Set());
-  const acc = useRef<{ inTargetSec: number; totalSec: number; hrSum: number; hrW: number }[]>([]);
+  const acc = useRef<{ inTargetSec: number; totalSec: number; hrSum: number; hrW: number; armed: boolean }[]>([]);
   const lastElapsed = useRef(0);
+  const lastNudgeAt = useRef(0); // elapsedSec of the last off-target voice nudge (throttle)
+  const nudgeN = useRef<Record<number, number>>({}); // off-target nudges spoken per interval (cap)
   const prevActive = useRef(false);
   const planId = useRef<string | null>(null);
   const publishedSec = useRef(-1);
@@ -64,8 +69,10 @@ export function useWorkoutRunner(args: {
     const planChanged = plan?.id !== planId.current;
     if (startedRun || planChanged) {
       fired.current = new Set();
-      acc.current = (plan?.intervals ?? []).map(() => ({ inTargetSec: 0, totalSec: 0, hrSum: 0, hrW: 0 }));
+      acc.current = (plan?.intervals ?? []).map(() => ({ inTargetSec: 0, totalSec: 0, hrSum: 0, hrW: 0, armed: false }));
       lastElapsed.current = elapsedSec;
+      lastNudgeAt.current = 0;
+      nudgeN.current = {};
       setAdherence({ pct: null, per: [] });
       planId.current = plan?.id ?? null;
     }
@@ -176,6 +183,23 @@ export function useWorkoutRunner(args: {
       if (iv.durationSec >= 24) {
         if (state.intervalElapsedSec >= iv.durationSec / 2) once(`half:${i}`, () => coach.say("Halfway."));
       }
+      // Target-HR feedback (HR-target intervals only): call out crossing INTO the
+      // zone once, else a gentle off-target nudge — spaced 45 s, max 3/interval,
+      // skipped during the HR ramp and the final 20 s, so it never nags.
+      if (state.band && iv.durationSec >= 40) {
+        if (state.hrStatus === "in") {
+          once(`inzone:${i}`, () => coach.say("On target. Hold it there."));
+        } else if (
+          state.intervalElapsedSec > 30 &&
+          state.remainingSec > 20 &&
+          (nudgeN.current[i] ?? 0) < 3 &&
+          elapsedSec - lastNudgeAt.current >= 45
+        ) {
+          nudgeN.current[i] = (nudgeN.current[i] ?? 0) + 1;
+          lastNudgeAt.current = elapsedSec;
+          coach.say(state.hrStatus === "under" ? "Still under target — lift it a little." : "Over target — ease back.");
+        }
+      }
       // ~20 s before this interval ends, preview the incoming one (needs an
       // interval long enough for a 20 s lead, and a next interval to preview).
       if (state.nextInterval && iv.durationSec >= 22 && state.remainingSec <= 20.5 && state.remainingSec > 11) {
@@ -203,7 +227,7 @@ export function useWorkoutRunner(args: {
         coach.say("Workout complete. Great work.");
       });
     }
-  }, [state, active, plan, profile]);
+  }, [state, active, plan, profile, elapsedSec]);
 
   // Adherence accumulation (throttled state update at ~1 Hz).
   useEffect(() => {
@@ -216,11 +240,18 @@ export function useWorkoutRunner(args: {
     const i = state.currentIndex;
     const bucket = acc.current[i];
     if (bucket && state.band) {
-      bucket.totalSec += dt;
-      if (hr != null) {
-        bucket.hrSum += hr * dt;
-        bucket.hrW += dt;
-        if (state.hrStatus === "in") bucket.inTargetSec += dt;
+      // Average HR over the WHOLE interval (informational).
+      if (hr != null) { bucket.hrSum += hr * dt; bucket.hrW += dt; }
+      // Compliance EXCLUDES the HR ramp: arm once HR first reaches the band, or
+      // once a grace cap elapses if it never does (so a genuinely-missed target
+      // still scores low). Only count in/total time after arming.
+      if (!bucket.armed) {
+        const graceCap = Math.min(120, (state.interval?.durationSec ?? 0) * 0.5);
+        if (state.hrStatus === "in" || state.intervalElapsedSec >= graceCap) bucket.armed = true;
+      }
+      if (bucket.armed) {
+        bucket.totalSec += dt;
+        if (hr != null && state.hrStatus === "in") bucket.inTargetSec += dt;
       }
     }
     // publish ~1 Hz
