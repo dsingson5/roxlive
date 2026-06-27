@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import type { RecoverySnap, RpeLog, SeriesPoint, SessionSummary } from "../types";
+import type { AthleteProfile, RecoverySnap, RpeLog, SeriesPoint, SessionSummary } from "../types";
 import type { PostResult } from "../lib/strava";
+import { analyzeWorkout } from "../lib/coach";
 import { modalityDef } from "../lib/modality";
 import { Sparkline } from "./Charts";
 import { ZONE_DEFS } from "../lib/zones";
@@ -21,6 +22,10 @@ export function SummaryModal({
   recovering,
   liveRecovery,
   onFinishRecovery,
+  apiKey,
+  model,
+  profile,
+  onAnalysis,
   onClose,
 }: {
   summary: SessionSummary | null;
@@ -46,6 +51,12 @@ export function SummaryModal({
   liveRecovery?: RecoverySnap;
   /** finish the recovery capture early + disconnect */
   onFinishRecovery?: () => void;
+  /** Anthropic API key + model for the post-run AI analysis (from Settings) */
+  apiKey?: string;
+  model?: string;
+  profile?: AthleteProfile;
+  /** persist Claude's analysis onto the session */
+  onAnalysis?: (text: string) => void;
   onClose: () => void;
 }) {
   return (
@@ -195,6 +206,10 @@ export function SummaryModal({
               )}
 
               {onFeel && <FeelSection summary={summary} onFeel={onFeel} />}
+
+              {!recovering && (
+                <CoachAnalysis key={summary.id} summary={summary} apiKey={apiKey} model={model} profile={profile} onAnalysis={onAnalysis} />
+              )}
 
               {onRpe && <RpeSection summary={summary} onRpe={onRpe} />}
 
@@ -362,6 +377,67 @@ function buildWorkoutNotes(s: SessionSummary): string {
   }
   L.push("", "Recorded with RoxLive by Hybrid Crew");
   return L.join("\n");
+}
+
+/** Post-run AI analysis: Claude's read of the session + recovery guidance. */
+function CoachAnalysis({
+  summary,
+  apiKey,
+  model,
+  profile,
+  onAnalysis,
+}: {
+  summary: SessionSummary;
+  apiKey?: string;
+  model?: string;
+  profile?: AthleteProfile;
+  onAnalysis?: (text: string) => void;
+}) {
+  const [state, setState] = useState<"idle" | "loading" | "error">("idle");
+  const [msg, setMsg] = useState<string | null>(null);
+  const note = summary.coachNote;
+  const hasData = summary.avgHr != null || summary.distanceM > 0;
+
+  const run = async () => {
+    if (!apiKey || !profile) return;
+    setState("loading");
+    setMsg(null);
+    const r = await analyzeWorkout({ summary, profile, apiKey, model: model || "claude-sonnet-4-6" });
+    if (r.ok && r.text) {
+      onAnalysis?.(r.text);
+      setState("idle");
+    } else {
+      setState("error");
+      setMsg(r.error || "Analysis failed.");
+    }
+  };
+
+  return (
+    <div className="card p-4 mb-4" style={{ borderColor: "rgba(124,109,242,0.35)" }}>
+      <div className="card-title mb-1">🧠 Coach analysis</div>
+      <div className="text-[10px] text-[var(--color-ink-faint)] mb-2">AI training guidance from your run data — general advice, not medical advice.</div>
+      {note ? (
+        <>
+          <div className="text-[13px] text-[var(--color-ink-dim)] whitespace-pre-wrap leading-relaxed">{note}</div>
+          <button onClick={run} disabled={state === "loading" || !hasData} className="btn-ghost h-8 px-3 mt-3 text-[12px] disabled:opacity-50">
+            {state === "loading" ? "Analyzing…" : "↻ Re-analyze"}
+          </button>
+        </>
+      ) : !apiKey ? (
+        <div className="text-[12px] text-[var(--color-ink-dim)]">Add your Anthropic API key in Settings to get Claude's read of this run and what to do for recovery.</div>
+      ) : !hasData ? (
+        <div className="text-[12px] text-[var(--color-ink-faint)]">Not enough data to analyze.</div>
+      ) : (
+        <>
+          <div className="text-[12px] text-[var(--color-ink-dim)] mb-2">Get Claude's read of this session and what to do for recovery next.</div>
+          <button onClick={run} disabled={state === "loading"} className="btn-volt h-10 px-4 text-sm font-semibold disabled:opacity-50">
+            {state === "loading" ? "Analyzing your run…" : "✨ Analyze with Claude"}
+          </button>
+        </>
+      )}
+      {state === "error" && msg && <div className="text-[11px] text-[var(--color-red)] mt-2">{msg}</div>}
+    </div>
+  );
 }
 
 function StravaPost({

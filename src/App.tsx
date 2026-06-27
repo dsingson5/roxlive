@@ -1110,6 +1110,14 @@ export default function App() {
         recovering={recovering}
         liveRecovery={snap.recovery}
         onFinishRecovery={finalizeStop}
+        apiKey={apiKey}
+        model={visionModel}
+        profile={profile}
+        onAnalysis={(text) => {
+          if (!summary) return;
+          setSummary({ ...summary, coachNote: text });
+          if (!summaryUnsaved) setHistory(updateHistory(summary.id, { coachNote: text }));
+        }}
         onKeep={() => {
           if (!summary) return;
           addToHistory(summary);
@@ -1140,6 +1148,14 @@ export default function App() {
         summary={historyDetail}
         fullSeries={historyDetail?.series ?? []}
         strava={{ connected: stravaConnected, post: strava.postActivity }}
+        apiKey={apiKey}
+        model={visionModel}
+        profile={profile}
+        onAnalysis={(text) => {
+          if (!historyDetail) return;
+          setHistoryDetail({ ...historyDetail, coachNote: text });
+          setHistory(updateHistory(historyDetail.id, { coachNote: text }));
+        }}
         onRepeat={historyDetail ? () => repeatSession(historyDetail) : undefined}
         onRpe={(rpe) => {
           if (!historyDetail) return;

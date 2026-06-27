@@ -371,6 +371,8 @@ export interface SessionSummary {
   intervalCount: number;
   /** post-effort heart-rate recovery (30 s / 60 s), captured after pause/stop. */
   recovery?: RecoveryResult;
+  /** Claude's post-run analysis + recovery guidance (saved once generated). */
+  coachNote?: string;
   segments: SegmentRecord[];
   /** downsampled series for the summary chart (~1 point / 5 s) */
   series: SeriesPoint[];
