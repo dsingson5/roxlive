@@ -96,14 +96,12 @@ export function RunnerScreen() {
         pixelFormat: "rgb",
         dataType: "uint8",
       });
-      // fast-tflite wants an ArrayBuffer input (not the TypedArray's possibly-offset buffer)
-      const input = resized.buffer.slice(resized.byteOffset, resized.byteOffset + resized.byteLength);
-      const outputs = model.model.runSync([input]);
-      // output is the 17×3 [y,x,score] keypoints; wrap defensively to a Float32Array
-      const o = outputs[0] as unknown;
-      const f = o instanceof Float32Array ? o : new Float32Array(o as ArrayBuffer);
+      // fast-tflite v1.6 runSync takes/returns TypedArrays. Input = the uint8
+      // resized frame; output[0] = the 17×3 [y,x,score] keypoints (Float32Array).
+      const outputs = model.model.runSync([resized]);
+      const out = outputs[0];
       const arr: number[] = [];
-      for (let i = 0; i < f.length; i++) arr.push(f[i]);
+      for (let i = 0; i < out.length; i++) arr.push(out[i] as number);
       onPose(arr, frame.timestamp);
     },
     [model, resize, onPose]

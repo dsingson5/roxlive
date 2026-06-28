@@ -7,5 +7,5 @@
       "@engine/*": ["../src/lib/*"]
     }
   },
-  "include": ["**/*.ts", "**/*.tsx", "../src/lib/**/*.ts"]
+  "include": ["**/*.ts", "**/*.tsx"]
 }
