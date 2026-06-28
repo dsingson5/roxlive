@@ -40,15 +40,48 @@ const CREW = [
   "carla",
   "erika",
   "liz",
-  "marianne",
-  "aleena",
   "fayth",
   "aura",
   "levelshyroxpt-sample",
   "ommohyroxpc-sample",
 ];
+// Access removed: "marianne", "aleena" (dropped from CREW → login + sync + admin
+// read all return 403, revoking any existing session token immediately too).
 const CREW_SET = new Set(CREW);
-const ADMIN = new Set(["david"]); // coach: may read any athlete's data
+const ADMIN = new Set(["david"]); // coach: may read any athlete's data + manage access
+
+// Coach-managed access control (dynamic; KV "access:v1"). Default = everyone
+// enabled with every card on; the store only records EXCEPTIONS, so it applies to
+// any crew member present OR added in the future without a code change.
+//   { disabled: { [user]: true }, cards: { [user]: { [cardId]: false } } }
+const ACCESS_KEY = "access:v1";
+// The toggleable feature "cards" a crew member can have. id = stable slug used by
+// the hub tiles (data-card) + page guards; label = shown in the coach UI.
+const CARDS = [
+  { id: "roxlive", label: "RoxLive (live workout app)" },
+  { id: "calmer", label: "Calmer / Sleep helper" },
+  { id: "strength", label: "Strength A–D" },
+  { id: "jakarta", label: "Road to Jakarta (taper plan)" },
+  { id: "weights", label: "Crew weights" },
+];
+const CARD_IDS = new Set(CARDS.map((c) => c.id));
+
+async function loadAccess(env) {
+  try {
+    const raw = await env.HISTORY.get(ACCESS_KEY);
+    if (!raw) return { disabled: {}, cards: {} };
+    const o = JSON.parse(raw);
+    return {
+      disabled: o && typeof o.disabled === "object" && o.disabled ? o.disabled : {},
+      cards: o && typeof o.cards === "object" && o.cards ? o.cards : {},
+    };
+  } catch {
+    return { disabled: {}, cards: {} };
+  }
+}
+async function saveAccess(env, cfg) {
+  await env.HISTORY.put(ACCESS_KEY, JSON.stringify({ disabled: cfg.disabled || {}, cards: cfg.cards || {} }));
+}
 const PBKDF2_ITER = 100000;
 const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const MIN_PASSWORD = 6;
@@ -96,6 +129,9 @@ export default {
       if (url.pathname === "/activity" && request.method === "POST") return await handleActivity(request, env, cors);
       if (url.pathname === "/admin/roster" && request.method === "GET") return await handleAdminRoster(request, env, cors);
       if (url.pathname === "/admin/activity" && request.method === "GET") return await handleAdminActivity(request, env, cors, url);
+      if (url.pathname === "/admin/access" && request.method === "GET") return await handleAdminAccessGet(request, env, cors);
+      if (url.pathname === "/admin/access" && request.method === "POST") return await handleAdminAccessSet(request, env, cors);
+      if (url.pathname === "/me/access" && request.method === "GET") return await handleMeAccess(request, env, cors);
       if (url.pathname === "/history") return await handleHistory(request, env, cors, url);
       if (url.pathname === "/review/upload" && request.method === "POST") return await handleReviewUpload(request, env, cors, url);
       if (url.pathname === "/review/list" && request.method === "GET") return await handleReviewList(request, env, cors);
@@ -136,6 +172,9 @@ async function handleLogin(request, env, cors) {
     if (!timingSafeEqual(got, rec.hash)) return json({ error: "wrong password" }, 401, cors);
     mustChange = !!rec.mustChange;
   }
+  // Coach can revoke access dynamically — a disabled user can't obtain a token.
+  const access = await loadAccess(env);
+  if (access.disabled[user]) return json({ error: "Access removed by your coach." }, 403, cors);
   await appendActivity(env, user, [{ t: Date.now(), type: "login" }]);
   const token = await makeToken(user, env.AUTH_SECRET, rec.epoch);
   return json({ ok: true, user, token, mustChange }, 200, cors);
@@ -167,7 +206,9 @@ async function handlePassword(request, env, cors) {
 
 // Verify the bearer token AND that its epoch still matches the token-holder's
 // auth record (so a password change revokes it). Returns the payload or null.
-async function authedPayload(request, env) {
+// Does NOT apply the coach disable — callers that must distinguish "bad/expired
+// token" from "disabled user" (e.g. /me/access) use this directly.
+async function verifySession(request, env) {
   const authz = request.headers.get("authorization") || "";
   const token = authz.startsWith("Bearer ") ? authz.slice(7) : "";
   const payload = token ? await verifyToken(token, env.AUTH_SECRET) : null;
@@ -181,6 +222,18 @@ async function authedPayload(request, env) {
     return null;
   }
   if (payload.e !== rec.epoch) return null;
+  return payload;
+}
+
+// Full auth for DATA endpoints: a coach-revoked user is rejected outright (even
+// with a still-valid, un-expired token). Admins are never disabled.
+async function authedPayload(request, env) {
+  const payload = await verifySession(request, env);
+  if (!payload) return null;
+  if (!ADMIN.has(payload.u)) {
+    const access = await loadAccess(env);
+    if (access.disabled[payload.u]) return null;
+  }
   return payload;
 }
 const isAdmin = (payload) => !!payload && ADMIN.has(payload.u);
@@ -315,6 +368,66 @@ async function handleAdminActivity(request, env, cors, url) {
   if (!USER_RE.test(user) || !CREW_SET.has(user)) return json({ error: "unknown user" }, 403, cors);
   const events = await readActivity(env, user);
   return json({ events: events.slice().reverse() }, 200, cors); // newest first
+}
+
+/* ----------------------- access control (coach-only) --------------------- */
+
+// Coach reads the whole roster + each member's disabled flag + disabled cards,
+// plus the card catalog, to drive the access UI.
+async function handleAdminAccessGet(request, env, cors) {
+  const payload = await authedPayload(request, env);
+  if (!isAdmin(payload)) return json({ error: "forbidden" }, 403, cors);
+  const cfg = await loadAccess(env);
+  const users = CREW.filter((u) => !ADMIN.has(u)).map((u) => ({
+    user: u,
+    disabled: !!cfg.disabled[u],
+    cards: cfg.cards[u] || {}, // only the OFF cards are present (cardId:false)
+  }));
+  return json({ cards: CARDS, users }, 200, cors);
+}
+
+// Coach toggles a user's whole access (op:"setUser") or one card (op:"setCard").
+async function handleAdminAccessSet(request, env, cors) {
+  const payload = await authedPayload(request, env);
+  if (!isAdmin(payload)) return json({ error: "forbidden" }, 403, cors);
+  const body = await readJson(request);
+  const op = String((body && body.op) || "");
+  const user = String((body && body.user) || "").toLowerCase();
+  if (!USER_RE.test(user) || !CREW_SET.has(user)) return json({ error: "unknown user" }, 403, cors);
+  if (ADMIN.has(user)) return json({ error: "cannot change the coach's own access" }, 403, cors);
+
+  const cfg = await loadAccess(env);
+  if (op === "setUser") {
+    if (body.disabled) cfg.disabled[user] = true;
+    else delete cfg.disabled[user];
+  } else if (op === "setCard") {
+    const cardId = String((body && body.cardId) || "");
+    if (!CARD_IDS.has(cardId)) return json({ error: "unknown card" }, 400, cors);
+    const cards = cfg.cards[user] || {};
+    if (body.enabled) delete cards[cardId];
+    else cards[cardId] = false;
+    if (Object.keys(cards).length) cfg.cards[user] = cards;
+    else delete cfg.cards[user];
+  } else {
+    return json({ error: "unknown op" }, 400, cors);
+  }
+  await saveAccess(env, cfg);
+  await appendActivity(env, user, [{ t: Date.now(), type: "access_change", detail: op }]);
+  return json({ ok: true, user, disabled: !!cfg.disabled[user], cards: cfg.cards[user] || {} }, 200, cors);
+}
+
+// Any signed-in member reads THEIR OWN effective access so the hub can hide
+// disabled cards. (Disabled users 401 here via authedPayload → the guard signs
+// them out.)
+async function handleMeAccess(request, env, cors) {
+  // verifySession (NOT authedPayload) so a disabled user with a valid token gets
+  // a 200 with disabled:true — the hub guard caches that and can enforce it even
+  // when the worker is later unreachable. A bad/expired token still 401s.
+  const payload = await verifySession(request, env);
+  if (!payload) return json({ error: "unauthorized" }, 401, cors);
+  const cfg = await loadAccess(env);
+  const disabled = !ADMIN.has(payload.u) && !!cfg.disabled[payload.u];
+  return json({ user: payload.u, admin: isAdmin(payload), disabled, cards: cfg.cards[payload.u] || {} }, 200, cors);
 }
 
 /* -------------------- async video coaching (review) ---------------------- */
@@ -606,7 +719,15 @@ function unionById(a, b) {
 function richer(x, y) {
   const base = (y.endedAt || 0) >= (x.endedAt || 0) ? y : x;
   const rpe = mergeRpe(x.rpe, y.rpe);
-  return rpe ? { ...base, rpe } : base;
+  // Post-hoc fields that one device may have and the other not — keep whichever
+  // copy carries them so a stale push can't drop the AI coach note / feel / RPE.
+  const coachNote = base.coachNote || x.coachNote || y.coachNote;
+  const feel = base.feel || x.feel || y.feel;
+  const out = { ...base };
+  if (rpe) out.rpe = rpe;
+  if (coachNote) out.coachNote = coachNote;
+  if (feel) out.feel = feel;
+  return out;
 }
 function mergeRpe(a, b) {
   if (!a && !b) return undefined;
