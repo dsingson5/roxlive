@@ -38,9 +38,6 @@
           "android": { "minSdkVersion": 26 }
         }
       ]
-    ],
-    "extra": {
-      "eas": { "projectId": "REPLACE_WITH_EAS_PROJECT_ID" }
-    }
+    ]
   }
 }
