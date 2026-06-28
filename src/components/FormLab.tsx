@@ -14,12 +14,13 @@ import { GaitAnalyzer, POSE_EDGES, type GaitSnapshot, type Landmarks } from "../
 import { createPoseDetector, createWorkerPoseDetector, canUseWorkerPose, type PoseDetector, type PoseQuality } from "../lib/pose";
 import { Metronome } from "../lib/metronome";
 import { RepFormAnalyzer, type RepFormSnapshot, type SetReport, type FaultHit } from "../lib/repForm";
-import { addStrengthSet, loadStrengthSets, summarizeTrend, type StrengthSet } from "../lib/strengthHistory";
+import { addStrengthSet, loadStrengthSets, loadLastByExercise, summarizeTrend, fmtLoad, relativeWhen, type StrengthSet, type LoadUnit } from "../lib/strengthHistory";
 import { EXERCISES, getExercise, matchExercise } from "../lib/exercises";
+import { StrengthWorkout } from "./StrengthWorkout";
 
 type Source = "camera" | "upload";
 type Status = "idle" | "loading" | "ready" | "running" | "summary" | "error";
-type Mode = "strength" | "run";
+type Mode = "workout" | "strength" | "run";
 
 const TARGET_MIN = 170; // evidence-based "good" cadence band (for coloring)
 const TARGET_MAX = 185;
@@ -57,11 +58,32 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
 
   // Strength rep-count + form-analysis mode (the camera rep-counter spec).
   const initEx = useMemo(() => matchExercise(initialExercise)?.id ?? "back_squat", [initialExercise]);
-  const [mode, setMode] = useState<Mode>("strength");
+  // Deep-link to a specific movement (?ex=) → single-set; otherwise default to
+  // the guided Strength workout runner (the main strength experience).
+  const [mode, setMode] = useState<Mode>(() => (initialExercise ? "strength" : "workout"));
+  // true while the StrengthWorkout runner's camera is live/starting — hides the
+  // mode tabs so a stray tap can't unmount + kill an in-progress workout.
+  const [workoutLive, setWorkoutLive] = useState(false);
   const [exId, setExId] = useState<string>(initEx);
   const [repSnap, setRepSnap] = useState<RepFormSnapshot | null>(null);
   const [repReport, setRepReport] = useState<SetReport | null>(null);
   const [voiceOn, setVoiceOn] = useState(true);
+  // Strength load: the weight entered for the current set + the most-recent set
+  // per exercise (so each lift shows what was last lifted, and when). The unit is
+  // a persisted preference; the load value pre-fills from the lift's last set.
+  const [unit, setUnit] = useState<LoadUnit>(() => {
+    try { return localStorage.getItem("roxlive.strength.unit") === "lb" ? "lb" : "kg"; } catch { return "kg"; }
+  });
+  const [load, setLoad] = useState<string>("");
+  const [lastByEx, setLastByEx] = useState<Record<string, StrengthSet>>({});
+  // Mirror load/unit into refs so the async set-complete path always reads the
+  // latest values. The exercise picker + load box only render before Start, so
+  // an uploaded clip's `video.onended` fires a stop() closure bound at Start
+  // time — reading the refs (not the captured state) keeps the saved weight current.
+  const loadRef = useRef(load);
+  const unitRef = useRef(unit);
+  useEffect(() => { loadRef.current = load; }, [load]);
+  useEffect(() => { unitRef.current = unit; }, [unit]);
   // Stage 6 "smooth tracking": run pose inference in a Web Worker (off the main
   // thread). Opt-in (default off) until validated on-device; ?smooth=1 enables.
   const [smoothMode, setSmoothMode] = useState(() => {
@@ -88,6 +110,27 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
   useEffect(() => {
     metroRef.current?.setSpm(targetSpm);
   }, [targetSpm]);
+
+  // persist the load unit (kg/lb) preference
+  useEffect(() => {
+    try { localStorage.setItem("roxlive.strength.unit", unit); } catch { /* ignore */ }
+  }, [unit]);
+
+  // load each exercise's most-recent set (for the "last lifted" annotations);
+  // refreshed after a set is logged so the picker + trend reflect it immediately.
+  const reloadLast = useCallback(() => {
+    loadLastByExercise().then(setLastByEx).catch(() => { /* storage unavailable */ });
+  }, []);
+  useEffect(() => { reloadLast(); }, [reloadLast]);
+
+  // Pre-fill the load box from the selected lift's last set when it was logged in
+  // the current unit (else blank, so we never show a number in the wrong unit).
+  // Keyed on the EXERCISE only (reads unit via ref): a kg/lb toggle must not wipe
+  // a value the athlete typed by hand — it just relabels the number.
+  useEffect(() => {
+    const l = lastByEx[exId];
+    setLoad(l && l.load != null && (l.loadUnit ?? "kg") === unitRef.current ? String(l.load) : "");
+  }, [exId, lastByEx]);
 
   const stopLoop = useCallback(() => {
     runningRef.current = false;
@@ -330,14 +373,19 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
       if (rpt && rpt.reps > 0) {
         speak(`Set complete. ${rpt.reps} reps.`);
         // Persist before showing the summary so its trend strip includes this set.
-        await addStrengthSet(rpt);
+        // Read via refs so an uploaded clip's auto-end (older stop() closure) still
+        // saves the latest weight the athlete entered.
+        const raw = loadRef.current.trim();
+        const v = raw === "" ? null : Number(raw);
+        await addStrengthSet(rpt, { value: v, unit: unitRef.current });
+        reloadLast(); // refresh the per-exercise "last lifted" annotations
       }
     } else {
       const snap = gaitRef.current.snapshot();
       setSummary(snap.steps > 0 ? snap : null);
     }
     setStatus("summary");
-  }, [stopLoop, mode, speak]);
+  }, [stopLoop, mode, speak, reloadLast]);
 
   const toggleMetro = useCallback(() => {
     setMetroOn((on) => {
@@ -382,6 +430,18 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
           <button onClick={onClose} className="btn-ghost h-9 px-3 text-sm flex items-center gap-1.5">✕ Close</button>
         </div>
 
+        {/* top-level mode (hidden while a single-set/run OR workout camera is live) */}
+        {!running && !workoutLive && (
+          <div className="flex bg-white/[0.04] rounded-xl p-0.5 border border-[var(--color-line)] w-max mb-3">
+            <Seg active={mode === "workout"} onClick={() => setMode("workout")}>Strength workout</Seg>
+            <Seg active={mode === "strength"} onClick={() => setMode("strength")}>Single set</Seg>
+            <Seg active={mode === "run"} onClick={() => setMode("run")}>Running form</Seg>
+          </div>
+        )}
+
+        {mode === "workout" ? (
+          <StrengthWorkout onRunningChange={setWorkoutLive} />
+        ) : (
         <div className="grid lg:grid-cols-[1.6fr_1fr] gap-4">
           {/* video + overlay */}
           <div>
@@ -445,17 +505,31 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
               )}
             </div>
 
-            {/* mode + exercise picker */}
+            {/* exercise picker + load (single-set mode) */}
             {!running && status !== "summary" && (
               <div className="flex flex-wrap items-center gap-2 mt-3">
-                <div className="flex bg-white/[0.04] rounded-xl p-0.5 border border-[var(--color-line)]">
-                  <Seg active={mode === "strength"} onClick={() => setMode("strength")}>Strength reps</Seg>
-                  <Seg active={mode === "run"} onClick={() => setMode("run")}>Running form</Seg>
-                </div>
                 {mode === "strength" && (
-                  <select value={exId} onChange={(e) => setExId(e.target.value)} className="inp h-9 text-[13px]" style={{ minWidth: 160 }} title="Exercise to count + check">
-                    {EXERCISES.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-                  </select>
+                  <>
+                    <select value={exId} onChange={(e) => setExId(e.target.value)} className="inp h-9 text-[13px]" style={{ minWidth: 160 }} title="Exercise to count + check">
+                      {EXERCISES.map((e) => {
+                        const l = lastByEx[e.id];
+                        // each lift shows what was last lifted, and when, right in the list
+                        const tail = l ? ` — last ${fmtLoad(l.load, l.loadUnit)} · ${relativeWhen(l.ts, Date.now())}` : "";
+                        return <option key={e.id} value={e.id}>{e.name}{tail}</option>;
+                      })}
+                    </select>
+                    <div className="flex items-center gap-1.5" title="Weight for this set — leave blank for bodyweight">
+                      <input
+                        type="number" inputMode="decimal" min={0} step={0.5} value={load}
+                        onChange={(e) => setLoad(e.target.value)} placeholder="load"
+                        className="inp h-9 text-[13px] w-[4.5rem]" aria-label="Load for this set"
+                      />
+                      <div className="flex bg-white/[0.04] rounded-xl p-0.5 border border-[var(--color-line)]">
+                        <Seg active={unit === "kg"} onClick={() => setUnit("kg")}>kg</Seg>
+                        <Seg active={unit === "lb"} onClick={() => setUnit("lb")}>lb</Seg>
+                      </div>
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -537,9 +611,10 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
           <div className="space-y-3">
             {mode === "strength" ? (
               status === "summary" ? (
-                <StrengthSummary r={repReport} exId={exId} exName={getExercise(exId)?.name ?? "Set"} onAgain={() => setStatus("idle")} />
+                <StrengthSummary r={repReport} exId={exId} exName={getExercise(exId)?.name ?? "Set"}
+                  load={load.trim() === "" || Number(load) <= 0 ? null : Number(load)} unit={unit} onAgain={() => setStatus("idle")} />
               ) : (
-                <StrengthLive s={repSnap} running={running} exName={getExercise(exId)?.name ?? ""} note={getExercise(exId)?.note} />
+                <StrengthLive s={repSnap} running={running} exName={getExercise(exId)?.name ?? ""} note={getExercise(exId)?.note} last={lastByEx[exId] ?? null} />
               )
             ) : status === "summary" && summary ? (
               <SummaryPanel s={summary} onAgain={() => setStatus("idle")} />
@@ -548,6 +623,7 @@ export function FormLab({ onClose, initialExercise }: { onClose: () => void; ini
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   );
@@ -583,7 +659,7 @@ function StrengthHud({ s, exName }: { s: RepFormSnapshot; exName: string }) {
   );
 }
 
-function StrengthLive({ s, running, exName, note }: { s: RepFormSnapshot | null; running: boolean; exName: string; note?: string }) {
+function StrengthLive({ s, running, exName, note, last }: { s: RepFormSnapshot | null; running: boolean; exName: string; note?: string; last?: StrengthSet | null }) {
   return (
     <>
       <div className="card p-4">
@@ -595,6 +671,13 @@ function StrengthLive({ s, running, exName, note }: { s: RepFormSnapshot | null;
         <div className="text-[11px] text-[var(--color-ink-faint)] mt-1">
           {running ? (s && s.quality < 0.5 ? "Measuring… keep your whole body in frame" : "Counting reps + checking form live.") : "Pick an exercise, frame yourself, then Start."}
         </div>
+        {!running && last && (
+          <div className="text-[12px] mt-2 pt-2 border-t border-[var(--color-line)]">
+            <span className="text-[var(--color-ink-faint)]">Last time: </span>
+            <span className="text-[var(--color-ink)] font-semibold">{fmtLoad(last.load, last.loadUnit)} × {last.reps}</span>
+            <span className="text-[var(--color-ink-faint)]"> · {relativeWhen(last.ts, Date.now())}</span>
+          </div>
+        )}
       </div>
 
       {running && s && (
@@ -629,7 +712,7 @@ function StrengthLive({ s, running, exName, note }: { s: RepFormSnapshot | null;
   );
 }
 
-function StrengthSummary({ r, exId, exName, onAgain }: { r: SetReport | null; exId: string; exName: string; onAgain: () => void }) {
+function StrengthSummary({ r, exId, exName, load, unit, onAgain }: { r: SetReport | null; exId: string; exName: string; load: number | null; unit: LoadUnit; onAgain: () => void }) {
   const [hist, setHist] = useState<StrengthSet[]>([]);
   useEffect(() => {
     let alive = true;
@@ -655,7 +738,7 @@ function StrengthSummary({ r, exId, exName, onAgain }: { r: SetReport | null; ex
         <div className="card-title mb-2">{exName} · set summary</div>
         <div className="flex items-end gap-2 mb-1">
           <div className="num text-6xl leading-none text-[var(--color-volt)]">{r.reps}</div>
-          <div className="text-sm text-[var(--color-ink-faint)] mb-1">reps · {r.cleanReps}/{r.reps} clean</div>
+          <div className="text-sm text-[var(--color-ink-faint)] mb-1">reps{load != null ? ` · ${fmtLoad(load, unit)}` : ""} · {r.cleanReps}/{r.reps} clean</div>
         </div>
         {t && <div className="text-[11px] text-[var(--color-ink-faint)]">avg tempo {t[0]}-{t[1]}-{t[2]} (ecc·pause·con) · TUT ~{Math.round((t[0] + t[1] + t[2]) * r.reps)}s</div>}
         {r.velLossPct != null && (
@@ -703,6 +786,7 @@ function StrengthTrend({ hist }: { hist: StrengthSet[] }) {
     <div className="card p-4">
       <div className="card-title mb-2">{hist[0]?.exerciseName} · last {t.sessions} sessions</div>
       <div className="flex gap-5 mb-3">
+        {t.lastLoad != null && <div><div className="num text-2xl leading-none text-[var(--color-volt)]">{fmtLoad(t.lastLoad, t.lastLoadUnit)}</div><div className="text-[10px] text-[var(--color-ink-faint)] mt-0.5">last load</div></div>}
         <div><div className="num text-2xl leading-none text-[var(--color-ink)]">{t.bestReps}</div><div className="text-[10px] text-[var(--color-ink-faint)] mt-0.5">best reps</div></div>
         <div><div className="num text-2xl leading-none text-[var(--color-ink)]">{t.avgCleanPct}%</div><div className="text-[10px] text-[var(--color-ink-faint)] mt-0.5">avg clean</div></div>
         {t.lastVelLossPct != null && <div><div className="num text-2xl leading-none text-[var(--color-ink)]">{t.lastVelLossPct}%</div><div className="text-[10px] text-[var(--color-ink-faint)] mt-0.5">last vel-loss</div></div>}
@@ -713,7 +797,7 @@ function StrengthTrend({ hist }: { hist: StrengthSet[] }) {
           return (
             <div key={s.id} className="flex items-center justify-between text-[12px]">
               <span className="text-[var(--color-ink-faint)]">{fmtDate(s.ts)}</span>
-              <span className="num text-[var(--color-ink-dim)]">{s.reps} reps · {cleanPct}% clean{s.velLossPct != null ? ` · ${s.velLossPct}% loss` : ""}</span>
+              <span className="num text-[var(--color-ink-dim)]">{fmtLoad(s.load, s.loadUnit)} · {s.reps} reps · {cleanPct}% clean{s.velLossPct != null ? ` · ${s.velLossPct}% loss` : ""}</span>
             </div>
           );
         })}

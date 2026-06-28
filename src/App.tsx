@@ -32,6 +32,9 @@ import { analyzeSession } from "./lib/analytics";
 import { computePmc, dailyTssDense, type PmcPoint } from "./lib/analytics/trainingLoad";
 import { analyzeWorkout } from "./lib/coach";
 import { selfTestStrengthHistory } from "./lib/strengthHistory";
+import { selfTestStrengthSession } from "./lib/strengthSession";
+import { selfTestStrengthRunner } from "./lib/strengthRunner";
+import { selfTestStrengthImport } from "./lib/strengthImport";
 import { getDeviceName, setDeviceName, defaultDeviceName, resolveDeviceLabel } from "./lib/deviceNames";
 import { CalendarPicker } from "./components/CalendarPicker";
 import {
@@ -647,6 +650,12 @@ export default function App() {
       console.log(`[repForm selfTest] ${rf.ok ? "PASS" : "FAIL"} — ${rf.detail}`);
       const sh = selfTestStrengthHistory();
       console.log(`[strengthHistory selfTest] ${sh.ok ? "PASS" : "FAIL"} — ${sh.detail}`);
+      const ss = selfTestStrengthSession();
+      console.log(`[strengthSession selfTest] ${ss.ok ? "PASS" : "FAIL"} — ${ss.detail}`);
+      const sr = selfTestStrengthRunner();
+      console.log(`[strengthRunner selfTest] ${sr.ok ? "PASS" : "FAIL"} — ${sr.detail}`);
+      const si = selfTestStrengthImport();
+      console.log(`[strengthImport selfTest] ${si.ok ? "PASS" : "FAIL"} — ${si.detail}`);
     }
   }, []);
 

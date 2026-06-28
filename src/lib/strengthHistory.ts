@@ -21,6 +21,8 @@ const DB_NAME = "roxlive-strength";
 const DB_VERSION = 1;
 const STORE = "sets";
 
+export type LoadUnit = "kg" | "lb";
+
 export interface StrengthSet {
   id: string; // `${ts}-${rand}`
   user: string; // crew id, or "anon"
@@ -33,6 +35,11 @@ export interface StrengthSet {
   velLossPct: number | null;
   velLossThreshold: number | null;
   faultCodes: string[]; // distinct fault codes seen in the set (compact)
+  /** Weight lifted, in `loadUnit`. null = bodyweight / not recorded. Added after
+   *  the store shipped, so historical records may lack it — readers treat the
+   *  absence as null (no schema bump needed: no new index). */
+  load?: number | null;
+  loadUnit?: LoadUnit;
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -58,9 +65,18 @@ function openDb(): Promise<IDBDatabase> {
 
 const userKey = (): string => resolveCrewUser() ?? "anon";
 
-/** Append one completed set. Best-effort: storage errors are swallowed. */
-export async function addStrengthSet(r: SetReport | null): Promise<void> {
+/**
+ * Append one completed set. Best-effort: storage errors are swallowed.
+ * `load` is the weight the athlete entered for this set (in `load.unit`); a null
+ * or non-positive value is stored as bodyweight (load: null).
+ */
+export async function addStrengthSet(
+  r: SetReport | null,
+  load?: { value: number | null; unit: LoadUnit }
+): Promise<void> {
   if (!r || r.reps <= 0) return;
+  const v = load?.value;
+  const cleanLoad = v != null && Number.isFinite(v) && v > 0 ? v : null;
   const rec: StrengthSet = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     user: userKey(),
@@ -73,6 +89,8 @@ export async function addStrengthSet(r: SetReport | null): Promise<void> {
     velLossPct: r.velLossPct,
     velLossThreshold: r.velLossThreshold,
     faultCodes: Array.from(new Set(r.faults.map((f) => f.code))),
+    load: cleanLoad,
+    loadUnit: load?.unit ?? "kg",
   };
   try {
     const db = await openDb();
@@ -108,6 +126,49 @@ export async function loadStrengthSets(exerciseId?: string): Promise<StrengthSet
   }
 }
 
+/**
+ * Reduce a newest-first set list to the most-recent set per exercise id.
+ * Pure (no IndexedDB) so the self-test can pin it. First hit wins → newest.
+ */
+export function pickLastByExercise(sets: StrengthSet[]): Record<string, StrengthSet> {
+  const out: Record<string, StrengthSet> = {};
+  for (const s of sets) if (!(s.exerciseId in out)) out[s.exerciseId] = s;
+  return out;
+}
+
+/** The current athlete's most-recent set per exercise (exerciseId → newest set). */
+export async function loadLastByExercise(): Promise<Record<string, StrengthSet>> {
+  return pickLastByExercise(await loadStrengthSets());
+}
+
+/** "80 kg", "82.5 kg", or "BW" when no load was recorded (bodyweight). */
+export function fmtLoad(load: number | null | undefined, unit: LoadUnit | undefined): string {
+  if (load == null || !Number.isFinite(load)) return "BW";
+  const n = Math.round(load * 10) / 10; // round BEFORE the zero check, so a sub-0.05 load reads "BW", not "0 kg"
+  if (n <= 0) return "BW";
+  return `${n % 1 === 0 ? n.toFixed(0) : n.toFixed(1)} ${unit ?? "kg"}`;
+}
+
+/**
+ * Friendly "when" for a past set: today / yesterday / Nd ago for the last week,
+ * else an absolute "Mon D" (with the year when it differs from now). `now` is
+ * passed in for testability and so the value is stable within a render.
+ */
+export function relativeWhen(ts: number, now: number): string {
+  const d0 = new Date(ts); d0.setHours(0, 0, 0, 0);
+  const n0 = new Date(now); n0.setHours(0, 0, 0, 0);
+  const days = Math.round((n0.getTime() - d0.getTime()) / 86400000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  const d = new Date(ts);
+  const opts: Intl.DateTimeFormatOptions =
+    d.getFullYear() === new Date(now).getFullYear()
+      ? { month: "short", day: "numeric" }
+      : { month: "short", day: "numeric", year: "numeric" };
+  return d.toLocaleDateString(undefined, opts);
+}
+
 /** Remove one set by id. Best-effort. */
 export async function deleteStrengthSet(id: string): Promise<void> {
   try {
@@ -132,6 +193,10 @@ export interface StrengthTrend {
   avgCleanPct: number | null;
   /** velocity-loss of the most recent set that tracked it, % */
   lastVelLossPct: number | null;
+  /** load of the most recent set (null = bodyweight / not recorded) */
+  lastLoad: number | null;
+  /** unit the most recent set's load was entered in */
+  lastLoadUnit: LoadUnit;
 }
 
 /**
@@ -139,16 +204,20 @@ export interface StrengthTrend {
  * Pure — the self-test below pins its arithmetic.
  */
 export function summarizeTrend(sets: StrengthSet[]): StrengthTrend {
-  if (!sets.length) return { sessions: 0, lastReps: null, bestReps: null, avgCleanPct: null, lastVelLossPct: null };
+  if (!sets.length)
+    return { sessions: 0, lastReps: null, bestReps: null, avgCleanPct: null, lastVelLossPct: null, lastLoad: null, lastLoadUnit: "kg" };
   const cleanPcts = sets.map((s) => (s.reps > 0 ? (s.cleanReps / s.reps) * 100 : 0));
   const avgClean = cleanPcts.reduce((a, b) => a + b, 0) / cleanPcts.length;
   const withVel = sets.find((s) => s.velLossPct != null); // newest-first → most recent tracked
+  const newest = sets[0];
   return {
     sessions: sets.length,
-    lastReps: sets[0].reps,
+    lastReps: newest.reps,
     bestReps: Math.max(...sets.map((s) => s.reps)),
     avgCleanPct: Math.round(avgClean),
     lastVelLossPct: withVel ? withVel.velLossPct : null,
+    lastLoad: newest.load ?? null,
+    lastLoadUnit: newest.loadUnit ?? "kg",
   };
 }
 
@@ -157,15 +226,29 @@ export function selfTestStrengthHistory(): { ok: boolean; detail: string } {
   const mk = (over: Partial<StrengthSet>): StrengthSet => ({
     id: "x", user: "anon", exerciseId: "back_squat", exerciseName: "Back Squat", ts: 0,
     reps: 5, cleanReps: 5, avgTempo: null, velLossPct: null, velLossThreshold: null, faultCodes: [],
+    load: null, loadUnit: "kg",
     ...over,
   });
   const sets = [
-    mk({ ts: 3, reps: 5, cleanReps: 3, velLossPct: 22 }), // newest
-    mk({ ts: 2, reps: 8, cleanReps: 8, velLossPct: null }),
+    mk({ ts: 3, reps: 5, cleanReps: 3, velLossPct: 22, load: 82.5, loadUnit: "kg" }), // newest
+    mk({ ts: 2, reps: 8, cleanReps: 8, velLossPct: null, load: 80, loadUnit: "kg" }),
     mk({ ts: 1, reps: 6, cleanReps: 3, velLossPct: 10 }),
   ];
   const t = summarizeTrend(sets);
-  // clean%: (60 + 100 + 50)/3 = 70 ; best reps 8 ; last 5 ; last tracked velLoss = newest with a value = 22
-  const ok = t.sessions === 3 && t.lastReps === 5 && t.bestReps === 8 && t.avgCleanPct === 70 && t.lastVelLossPct === 22 && summarizeTrend([]).sessions === 0;
-  return { ok, detail: `sessions=${t.sessions} lastReps=${t.lastReps} bestReps=${t.bestReps} avgClean=${t.avgCleanPct}% lastVelLoss=${t.lastVelLossPct}` };
+  // clean%: (60 + 100 + 50)/3 = 70 ; best reps 8 ; last 5 ; last tracked velLoss = newest with a value = 22 ; last load = newest = 82.5
+  const trendOk = t.sessions === 3 && t.lastReps === 5 && t.bestReps === 8 && t.avgCleanPct === 70 && t.lastVelLossPct === 22 && t.lastLoad === 82.5 && summarizeTrend([]).sessions === 0;
+
+  // last-by-exercise picks the newest set per id; formatters render load + "when".
+  const multi = [
+    mk({ id: "a", ts: 3, exerciseId: "bench_press", exerciseName: "Bench", load: 60 }), // newest bench
+    mk({ id: "b", ts: 2, exerciseId: "bench_press", exerciseName: "Bench", load: 55 }),
+    mk({ id: "c", ts: 1, exerciseId: "back_squat", load: 100 }),
+  ];
+  const byEx = pickLastByExercise(multi);
+  const pickOk = byEx.bench_press?.id === "a" && byEx.back_squat?.id === "c" && Object.keys(byEx).length === 2;
+  const fmtOk = fmtLoad(80, "kg") === "80 kg" && fmtLoad(82.5, "kg") === "82.5 kg" && fmtLoad(null, "kg") === "BW" && fmtLoad(0, "lb") === "BW" && fmtLoad(0.04, "kg") === "BW";
+  const whenOk = relativeWhen(0, 0) === "today";
+
+  const ok = trendOk && pickOk && fmtOk && whenOk;
+  return { ok, detail: `trend=${trendOk} pick=${pickOk} fmt=${fmtOk} when=${whenOk} · lastLoad=${t.lastLoad}${t.lastLoadUnit}` };
 }

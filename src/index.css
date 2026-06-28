@@ -189,6 +189,23 @@ body {
   box-shadow: 0 0 0 3px rgba(216, 255, 58, 0.12);
 }
 
+/* Native <select> popup options: the OS renders the option list with its own
+   (light) background, so the inherited near-white .inp text was invisible until
+   hovered/selected. Force a dark surface + light ink (and a volt highlight) so
+   every option is legible in the closed control AND the open dropdown. */
+.inp option,
+.inp optgroup,
+select option,
+select optgroup {
+  background-color: var(--color-surface2);
+  color: var(--color-ink);
+}
+.inp option:checked,
+select option:checked {
+  background: var(--color-volt);
+  color: #0b0c06;
+}
+
 /* Thin scrollbars */
 * {
   scrollbar-width: thin;

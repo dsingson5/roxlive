@@ -70,6 +70,15 @@ export const EXERCISES: Exercise[] = [
     ],
   },
   {
+    id: "rfe_split_squat", name: "Rear-Foot-Elevated Split Squat", view: "either", primary: "kneeAngle", topEnter: 160, bottomEnter: 95,
+    romLabel: "front-thigh depth", note: "Bulgarian/RFE split squat — rear foot on the bench, weight through the FRONT heel. Front shin stays fairly vertical, knee tracks over the foot, front thigh to ~parallel. Film front-on for knee tracking, side-on for depth + trunk. Count one leg at a time.",
+    formChecks: [
+      { code: "depth", metric: "kneeAngle", at: "min", op: ">", value: 105, fault: "shallow depth", cue: "Sink until the front thigh is about parallel", severity: "info", view: "either" },
+      { code: "trunk_lean", metric: "trunkLean", at: "max", op: ">", value: 35, fault: "torso tipping forward", cue: "Stay tall — a small forward lean is fine, don't collapse the chest", severity: "warn", view: "sagittal" },
+      { code: "knee_valgus", metric: "kneeValgusPct", at: "max", op: ">", value: 14, fault: "front knee caving", cue: "Drive the front knee out over the foot", severity: "warn", view: "frontal", reliability: "low_2d" },
+    ],
+  },
+  {
     id: "overhead_press", velocity: { track: "wrist", lossThresholdPct: 20 }, name: "Overhead Press", view: "sagittal", primary: "elbowAngle", topEnter: 160, bottomEnter: 85,
     romLabel: "overhead lockout", note: "Press to full lockout, biceps by the ears; ribs down (no big back-lean).",
     formChecks: [
@@ -212,11 +221,13 @@ export function matchExercise(label: string | null | undefined): Exercise | null
   if (has("front squat")) return EXERCISE_BY_ID.front_squat;
   if (has("goblet")) return EXERCISE_BY_ID.goblet_squat;
   if (has("cossack")) return EXERCISE_BY_ID.cossack_squat;
+  // RFESS / split squat / lunge BEFORE the generic "squat" catch-all (all contain "squat").
+  if (has("rear foot elevated", "rear-foot", "rfe", "rfess", "bulgarian")) return EXERCISE_BY_ID.rfe_split_squat;
+  if (has("split squat", "lunge")) return EXERCISE_BY_ID.walking_lunge;
   if (has("squat")) return EXERCISE_BY_ID.back_squat;
   if (has("rdl", "romanian")) return EXERCISE_BY_ID.rdl;
   if (has("trap", "hex bar", "hex-bar")) return EXERCISE_BY_ID.trap_bar_deadlift;
   if (has("deadlift", "pull from floor")) return EXERCISE_BY_ID.conventional_deadlift;
-  if (has("lunge", "split squat", "rfe")) return EXERCISE_BY_ID.walking_lunge;
   if (has("push press")) return EXERCISE_BY_ID.push_press;
   if (has("push-up", "push up", "pushup", "press-up", "press up")) return EXERCISE_BY_ID.push_up;
   if (has("overhead", "ohp", "shoulder press", "strict press", "military")) return EXERCISE_BY_ID.overhead_press;
