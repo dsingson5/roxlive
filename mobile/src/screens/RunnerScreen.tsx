@@ -15,6 +15,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import {
   Camera,
   useCameraDevice,
+  useCameraFormat,
   useCameraPermission,
   useFrameProcessor,
 } from "react-native-vision-camera";
@@ -27,9 +28,6 @@ import { EXERCISES, getExercise } from "@engine/exercises";
 import { moveNetToLandmarks, poseQuality } from "../pose/movenet";
 import { say, setVoiceEnabled } from "../coach/speech";
 
-// MoveNet SinglePose Lightning (int8) — verify/replace this URL (see README).
-const MOVENET_URL = "https://storage.googleapis.com/tfhub-lite-models/google/lite-model/movenet/singlepose/lightning/tflite/int8/4.tflite";
-
 const VOLT = "#d8ff3a";
 const INK = "#f2f4f6";
 const DIM = "#9aa3b2";
@@ -40,7 +38,10 @@ const RED = "#ff4d4d";
 export function RunnerScreen() {
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice("back");
-  const model = useTensorflowModel({ url: MOVENET_URL });
+  // pick a 60fps-capable format (the whole point of going native); falls back to 30
+  const format = useCameraFormat(device, [{ fps: 60 }]);
+  // MoveNet SinglePose Lightning (int8), bundled. See mobile/assets/README.md to add it.
+  const model = useTensorflowModel(require("../../assets/movenet.tflite"));
   const { resize } = useResizePlugin();
 
   const [exId, setExId] = useState("back_squat");
@@ -95,10 +96,14 @@ export function RunnerScreen() {
         pixelFormat: "rgb",
         dataType: "uint8",
       });
-      const outputs = model.model.runSync([resized]);
-      const out = outputs[0]; // Float32Array, 17×3 [y,x,score]
+      // fast-tflite wants an ArrayBuffer input (not the TypedArray's possibly-offset buffer)
+      const input = resized.buffer.slice(resized.byteOffset, resized.byteOffset + resized.byteLength);
+      const outputs = model.model.runSync([input]);
+      // output is the 17×3 [y,x,score] keypoints; wrap defensively to a Float32Array
+      const o = outputs[0] as unknown;
+      const f = o instanceof Float32Array ? o : new Float32Array(o as ArrayBuffer);
       const arr: number[] = [];
-      for (let i = 0; i < out.length; i++) arr.push(out[i] as number);
+      for (let i = 0; i < f.length; i++) arr.push(f[i]);
       onPose(arr, frame.timestamp);
     },
     [model, resize, onPose]
@@ -144,10 +149,11 @@ export function RunnerScreen() {
           isActive={running}
           frameProcessor={running ? frameProcessor : undefined}
           pixelFormat="yuv"
-          fps={60}
+          format={format}
+          fps={format ? Math.min(60, format.maxFps) : 30}
         />
         {model.state !== "loaded" && (
-          <View style={styles.overlay}><Text style={styles.faint}>{model.state === "loading" ? "Loading pose model…" : "Model error — check the URL"}</Text></View>
+          <View style={styles.overlay}><Text style={styles.faint}>{model.state === "loading" ? "Loading pose model…" : "Model error — see mobile/assets/README.md"}</Text></View>
         )}
       </View>
 

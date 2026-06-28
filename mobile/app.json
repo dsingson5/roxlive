@@ -28,6 +28,10 @@
         }
       ],
       [
+        "react-native-fast-tflite",
+        { "enableCoreMLDelegate": true }
+      ],
+      [
         "expo-build-properties",
         {
           "ios": { "deploymentTarget": "15.1" },

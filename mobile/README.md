@@ -51,12 +51,13 @@ npm install
 eas init                 # creates the project, fills extra.eas.projectId in app.json
 ```
 
-### The pose model
-`RunnerScreen.tsx` loads MoveNet from a URL (`MOVENET_URL`). **Verify that URL**
-(it points at the TF-Hub Lightning/int8 tflite); if it 404s, download a MoveNet
-SinglePose Lightning `.tflite`, drop it in `mobile/assets/`, and switch to a
-bundled load: `useTensorflowModel(require("../../assets/movenet.tflite"))`
-(Metro already bundles `.tflite` — see `metro.config.js`).
+### The pose model (do this first)
+`RunnerScreen.tsx` loads MoveNet from a **bundled** asset:
+`require("../../assets/movenet.tflite")`. That binary is not committed — **download
+it once** and drop it at `mobile/assets/movenet.tflite` before building, or Metro
+errors on the missing require. See **[assets/README.md](assets/README.md)** for the
+exact download link + steps. (Metro already bundles `.tflite`; `app.json` registers
+the `react-native-fast-tflite` config plugin.)
 
 ## Build & run (no Mac required)
 
