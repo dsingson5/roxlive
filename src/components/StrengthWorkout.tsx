@@ -22,7 +22,7 @@ import {
   newSession, newBlock, newSet, propagateWeight, saveSession, loadSession,
   type StrengthSession, type StrengthBlock,
 } from "../lib/strengthSession";
-import { fetchStrengthSession, todaysStrengthLetter, type ImportResult, type StrengthLetter } from "../lib/strengthImport";
+import { fetchStrengthSession, todaysStrengthLetter, fetchCalendarStrengthDays, type ImportResult, type StrengthLetter, type CalendarStrengthDay } from "../lib/strengthImport";
 import {
   initRunner, runnerReducer, runnerView, BRIEF_SEC,
   briefText, restHalfwayText, postSetText, doneText,
@@ -405,6 +405,13 @@ export function StrengthWorkout({ quality = "full", onRunningChange }: { quality
       applyImport(await fetchStrengthSession(l), `today's Strength ${l}`);
     } finally { setImporting(false); }
   }, [applyImport]);
+  // all strength sessions programmed in the athlete's training calendar
+  const [calDays, setCalDays] = useState<CalendarStrengthDay[]>([]);
+  useEffect(() => { fetchCalendarStrengthDays().then(setCalDays).catch(() => { /* offline / no calendar */ }); }, []);
+  const importCalDay = useCallback((d: CalendarStrengthDay) => {
+    setImporting(true); setImportMsg(null);
+    (async () => { try { applyImport(await fetchStrengthSession(d.letter), `${d.dateLabel} · Strength ${d.letter}`); } finally { setImporting(false); } })();
+  }, [applyImport]);
 
   const updateSet = (bi: number, si: number, field: keyof StrengthBlock["sets"][number], raw: string) => mutate((s) => {
     const b = s.blocks[bi];
@@ -441,6 +448,7 @@ export function StrengthWorkout({ quality = "full", onRunningChange }: { quality
           onAddSet={addSet} onRemoveSet={removeSet} onUpdateSet={updateSet}
           onStart={startWorkout} loading={status === "loading"} errorMsg={errorMsg}
           onImportLetter={importLetter} onImportToday={importToday} importMsg={importMsg} importing={importing}
+          calDays={calDays} onImportCalDay={importCalDay}
         />
       )}
 
@@ -581,7 +589,7 @@ function RunnerPanel({ view, liveSnap, voiceOn, onToggleVoice, onEndSet, onSkipR
 /* ================================================================== */
 /* Session builder                                                     */
 /* ================================================================== */
-function SessionBuilder({ session, onTitle, onAddBlock, onRemoveBlock, onUnit, onTempo, onAddSet, onRemoveSet, onUpdateSet, onStart, loading, errorMsg, onImportLetter, onImportToday, importMsg, importing }: {
+function SessionBuilder({ session, onTitle, onAddBlock, onRemoveBlock, onUnit, onTempo, onAddSet, onRemoveSet, onUpdateSet, onStart, loading, errorMsg, onImportLetter, onImportToday, importMsg, importing, calDays, onImportCalDay }: {
   session: StrengthSession;
   onTitle: (t: string) => void;
   onAddBlock: (exerciseId: string) => void;
@@ -598,11 +606,13 @@ function SessionBuilder({ session, onTitle, onAddBlock, onRemoveBlock, onUnit, o
   onImportToday: () => void;
   importMsg: string | null;
   importing: boolean;
+  calDays: CalendarStrengthDay[];
+  onImportCalDay: (d: CalendarStrengthDay) => void;
 }) {
   const [pick, setPick] = useState(EXERCISES[0].id);
   return (
     <div className="max-w-[760px]">
-      {/* import from the hub Strength A/B/C/D pages or today's calendar session */}
+      {/* import a hub Strength A/B/C/D page, today's session, or any calendar day */}
       <div className="card p-3 mb-3">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="card-title mr-1">Import</span>
@@ -612,6 +622,23 @@ function SessionBuilder({ session, onTitle, onAddBlock, onRemoveBlock, onUnit, o
           <button onClick={onImportToday} disabled={importing} className="btn-ghost h-8 px-3 text-[13px] disabled:opacity-50" style={{ borderColor: "var(--color-cyan)", color: "var(--color-cyan)" }}>★ Today</button>
           {importing && <span className="text-[12px] text-[var(--color-ink-faint)]">loading…</span>}
         </div>
+        {calDays.length > 0 && (
+          <div className="flex items-center gap-1.5 mt-2">
+            <span className="text-[11px] text-[var(--color-ink-faint)]">From my calendar</span>
+            <select
+              value=""
+              disabled={importing}
+              onChange={(e) => { const d = calDays.find((x) => x.key === e.target.value); if (d) onImportCalDay(d); }}
+              className="inp h-8 text-[12px] flex-1 disabled:opacity-50"
+              aria-label="Import a scheduled strength day"
+            >
+              <option value="">Pick a scheduled day… ({calDays.length})</option>
+              {calDays.map((d) => (
+                <option key={d.key} value={d.key}>{d.isToday ? "★ " : ""}{d.dateLabel} · Strength {d.letter}{d.isToday ? " (today)" : ""}</option>
+              ))}
+            </select>
+          </div>
+        )}
         {importMsg && <div className="text-[11px] text-[var(--color-ink-dim)] mt-2 leading-relaxed">{importMsg}</div>}
       </div>
 

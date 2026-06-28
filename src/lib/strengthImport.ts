@@ -119,6 +119,12 @@ export async function fetchStrengthSession(letter: StrengthLetter, signal?: Abor
   }
 }
 
+/** The Strength A–D letter referenced in a calendar day's text, or null. */
+export function strengthLetterIn(text: string): StrengthLetter | null {
+  const m = text.match(/strength[\s-]?([A-D])\b/i);
+  return m ? (m[1].toUpperCase() as StrengthLetter) : null;
+}
+
 /** Which strength session (A–D) the current athlete's calendar schedules today, or null. */
 export async function todaysStrengthLetter(signal?: AbortSignal): Promise<StrengthLetter | null> {
   const page = calendarPageFor(resolveCrewUser());
@@ -127,9 +133,33 @@ export async function todaysStrengthLetter(signal?: AbortSignal): Promise<Streng
   // ONLY a real today match — never fall back to an arbitrary day (every entry has
   // a dateLabel, so the old fallback always picked entries[0] = the wrong day).
   const today = entries.find((e) => e.isToday) ?? null;
-  if (!today) return null;
-  const m = `${today.title} ${today.summary ?? ""}`.match(/strength[\s-]?([A-D])\b/i);
-  return m ? (m[1].toUpperCase() as StrengthLetter) : null;
+  return today ? strengthLetterIn(`${today.title} ${today.summary ?? ""}`) : null;
+}
+
+export interface CalendarStrengthDay {
+  key: string;
+  dateLabel: string;
+  letter: StrengthLetter;
+  title: string;
+  isToday: boolean;
+}
+
+/**
+ * Every strength session (A–D) programmed in the current athlete's training
+ * calendar window (past week … 3 weeks ahead). Lets the runner import ANY
+ * scheduled day, not just today. Cardio days have no letter → excluded (they run
+ * in the main analyzer). [] on no calendar / offline.
+ */
+export async function fetchCalendarStrengthDays(signal?: AbortSignal): Promise<CalendarStrengthDay[]> {
+  const page = calendarPageFor(resolveCrewUser());
+  if (!page) return [];
+  const entries = await fetchCalendarWorkouts(page, signal);
+  const out: CalendarStrengthDay[] = [];
+  for (const e of entries) {
+    const letter = strengthLetterIn(`${e.title} ${e.summary ?? ""}`);
+    if (letter) out.push({ key: e.key, dateLabel: e.dateLabel, letter, title: e.title, isToday: !!e.isToday });
+  }
+  return out;
 }
 
 /* ---------------- dev self-test ---------------- */
@@ -161,6 +191,7 @@ export function selfTestStrengthImport(): { ok: boolean; detail: string } {
   expect(parseRepsTarget("5 × 100%") === null && parseRepsTarget("4 × 30 cal") === null && parseRepsTarget("4 × :30") === null && parseRepsTarget('4 × 30"') === null, "parseRepsTarget cal/%/time");
   expect(parseRpe("RPE 7–8") === 8 && parseRpe("RPE 8 · ~82%") === 8 && parseRpe("flow") === null && parseRpe("80–100% BW") === null, "parseRpe");
   expect(cleanExerciseName("Trap-Bar Deadlift or front squat (alt)") === "Trap-Bar Deadlift", `cleanName (${cleanExerciseName("Trap-Bar Deadlift or front squat (alt)")})`);
+  expect(strengthLetterIn("Bike AM · Strength C PM ★") === "C" && strengthLetterIn("Strength-A PM") === "A" && strengthLetterIn("Easy Z2 run") === null, "strengthLetterIn");
 
   return { ok, detail: ok ? `2 blocks, 1 skipped, reps/rpe/name parsed` : checks.join("; ") };
 }
