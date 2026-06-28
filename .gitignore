@@ -6,3 +6,8 @@ tmp/
 .wrangler/
 sync/.sync-key.txt
 sync/.auth-secret.txt
+
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
