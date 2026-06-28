@@ -3,7 +3,7 @@ import type { SeriesPoint, SessionSummary } from "../../types";
 import { analyzeSession } from "./index";
 import { trainingLoad, computePmc, dailyTssDense } from "./trainingLoad";
 import { pwlfOneKnot } from "./durability";
-import { classifyDecoupling, efficiencyFactor } from "./efficiency";
+import { classifyDecoupling, efficiencyFactor, decoupling } from "./efficiency";
 import { mbpFamily } from "./util";
 import { refuel } from "./refuel";
 import { strideFatigue } from "./physiology";
@@ -119,6 +119,24 @@ const prof = { maxHr: 185, restHr: 48, weightKg: 74, sex: "male" as const };
   const pts: SeriesPoint[] = Array.from({ length: 120 }, (_, i): SeriesPoint => ({ t: i * 1000, hr: 150, alpha1: null, speedMps: 3.0, brpm: null, zone: null, cadence: 85 }));
   const st = strideFatigue(pts);
   ok("stride doubles single-leg cadence (~170 spm, ~1.06 m)", !!st && st.avgCadenceSpm > 160 && st.avgStrideM < 1.5, st ? `${st.avgStrideM}m @ ${st.avgCadenceSpm}spm` : "null");
+}
+
+// 7) MBP-style decoupling: warm-up excluded, positive drift when EF declines.
+{
+  const N = 1800; // 30 min @ 1 Hz
+  // constant speed; HR drifts up 150→162 → EF declines → positive decoupling
+  const pts: SeriesPoint[] = Array.from({ length: N }, (_, i): SeriesPoint => ({ t: i * 1000, hr: Math.round(150 + 12 * (i / N)), alpha1: null, speedMps: 3.3, brpm: null, zone: null, cadence: null }));
+  const dec = decoupling(pts, 0);
+  ok("decoupling positive when EF declines", !!dec && dec.pct > 0 && dec.method === "EF", dec ? `${dec.pct}% (${dec.method})` : "null");
+  // a fast-then-steady warm-up: trimming the first 5 min changes the number
+  const pts2: SeriesPoint[] = Array.from({ length: N }, (_, i): SeriesPoint => ({ t: i * 1000, hr: i < 300 ? 120 : Math.round(150 + 12 * (i / N)), alpha1: null, speedMps: 3.3, brpm: null, zone: null, cadence: null }));
+  const incl = decoupling(pts2, 0);
+  const excl = decoupling(pts2, 300);
+  ok("decoupling warm-up trim changes result", !!incl && !!excl && Math.abs(incl.pct - excl.pct) > 0.3, `incl ${incl?.pct}% vs excl ${excl?.pct}%`);
+  // HR-only mode (no speed) → cardiac drift
+  const ptsHr: SeriesPoint[] = Array.from({ length: N }, (_, i): SeriesPoint => ({ t: i * 1000, hr: Math.round(150 + 12 * (i / N)), alpha1: null, speedMps: null, brpm: null, zone: null, cadence: null }));
+  const decHr = decoupling(ptsHr, 0);
+  ok("decoupling HR-only mode", !!decHr && decHr.method === "HR drift" && decHr.pct > 0, decHr ? `${decHr.pct}% (${decHr.method})` : "null");
 }
 
 console.log(fail === 0 ? "\nALL PASS" : `\n${fail} FAILURE(S)`);

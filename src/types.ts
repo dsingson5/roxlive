@@ -348,6 +348,9 @@ export interface PostRunAnalytics {
   cardiacCostBpkm?: number; // beats per km
   cardiacRisePct?: number | null;
   intensity?: { pctMax: number; pctHrr: number | null; zone: string };
+  /** MBP-style aerobic decoupling on the post-warm-up clean segment (positive = drift). */
+  decouplingPct?: number;
+  decouplingMethod?: "EF" | "HR drift";
   decouplingClass?: string;
   durabilityMin?: number | null; // point-of-no-return, minutes into the effort
   durabilityConf?: "low" | "medium" | "high";

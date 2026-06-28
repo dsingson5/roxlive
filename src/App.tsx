@@ -184,7 +184,7 @@ export default function App() {
       try {
         const analytics = analyzeSession(s, s.series || [], prof);
         n++;
-        return { ...s, analytics };
+        return { ...s, analytics, decouplingPct: analytics.decouplingPct ?? s.decouplingPct };
       } catch {
         return s;
       }
@@ -217,7 +217,12 @@ export default function App() {
       try {
         const r = await analyzeWorkout({ summary: withA, profile, apiKey, model: visionModel, pmc: pmcFor(withA) });
         if (r.ok && r.text) {
-          updateHistory(s.id, analytics && !s.analytics ? { coachNote: r.text, analytics } : { coachNote: r.text });
+          const patch: Partial<typeof s> = { coachNote: r.text };
+          if (analytics && !s.analytics) {
+            patch.analytics = analytics;
+            if (analytics.decouplingPct != null) patch.decouplingPct = analytics.decouplingPct;
+          }
+          updateHistory(s.id, patch);
           ok = true;
         }
       } catch { /* count as failure below */ }
@@ -838,7 +843,7 @@ export default function App() {
     if (!recoveringRef.current) return; // not in a recovery window (already finalized / new session)
     recoveringRef.current = false;
     const rec = eng.getRecovery();
-    eng.stop();
+    eng.stop({ keepSensor: true }); // keep the HRM connected — only a manual disconnect drops it
     clearAnchor();
     setFreeStarted(false);
     setRecovering(false);
@@ -878,6 +883,9 @@ export default function App() {
     // from MBP-beta — computed from the full 1 Hz series before it's downsampled.
     try {
       s.analytics = analyzeSession(s, series, { maxHr: profile.maxHr, restHr: profile.restHr, weightKg: profile.weightKg, age: profile.age });
+      // Make the canonical decoupling the MBP one (warm-up excluded) so it shows
+      // consistently in the summary, coach prompt + hub feed.
+      if (s.analytics?.decouplingPct != null) s.decouplingPct = s.analytics.decouplingPct;
     } catch { /* analytics are best-effort */ }
     fullSeriesRef.current = [...series];
     if (startTimerRef.current) { clearTimeout(startTimerRef.current); startTimerRef.current = null; }
@@ -909,7 +917,7 @@ export default function App() {
       setRecovering(true);
       recoveryTimerRef.current = window.setTimeout(finalizeStop, 63000);
     } else {
-      eng.stop();
+      eng.stop({ keepSensor: true }); // keep the HRM connected after stop
       clearAnchor();
       setFreeStarted(false);
     }
@@ -970,6 +978,7 @@ export default function App() {
         device={eng.device}
         deviceLabel={deviceLabel}
         onRenameDevice={renameDevice}
+        onDisconnectDevice={() => { if (window.confirm("Disconnect this sensor? It stays connected between workouts otherwise.")) eng.disconnect(); }}
         mode={eng.mode}
         raceMode={raceMode}
         onSectionChange={handleSectionChange}
@@ -1218,10 +1227,10 @@ export default function App() {
           if (!summaryUnsaved) setHistory(updateHistory(summary.id, { feel }));
         }}
         onClose={() => {
-          finalizeStop(); // capture recovery + disconnect if still in the recovery window
+          finalizeStop(); // capture recovery if still in the recovery window (keeps the sensor)
           setSummary(null);
           setSummaryUnsaved(false);
-          eng.reset();
+          eng.reset({ keepSensor: true }); // keep the HRM connected for the next session
         }}
       />
 

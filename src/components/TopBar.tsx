@@ -25,6 +25,7 @@ export function TopBar({
   onLogout,
   deviceLabel,
   onRenameDevice,
+  onDisconnectDevice,
   pipActive,
   pipSupported,
   supported,
@@ -35,6 +36,8 @@ export function TopBar({
   deviceLabel?: string | null;
   /** rename the connected sensor */
   onRenameDevice?: () => void;
+  /** manually disconnect the sensor (it stays connected between workouts otherwise) */
+  onDisconnectDevice?: () => void;
   mode: SourceMode;
   raceMode: "free" | "hyrox" | "workout" | "squad";
   onSectionChange: (s: "workout" | "squad") => void;
@@ -109,7 +112,7 @@ export function TopBar({
         <div className="flex-1" />
 
         {/* device chip */}
-        {device && <DeviceChip device={device} label={deviceLabel} onRename={onRenameDevice} />}
+        {device && <DeviceChip device={device} label={deviceLabel} onRename={onRenameDevice} onDisconnect={onDisconnectDevice} />}
 
         {/* actions */}
         <div className="flex items-center gap-2">
@@ -222,7 +225,7 @@ function ModeBtn({ active, onClick, children }: { active: boolean; onClick: () =
   );
 }
 
-function DeviceChip({ device, label, onRename }: { device: DeviceInfo; label?: string | null; onRename?: () => void }) {
+function DeviceChip({ device, label, onRename, onDisconnect }: { device: DeviceInfo; label?: string | null; onRename?: () => void; onDisconnect?: () => void }) {
   const colorMap: Record<string, string> = {
     connected: "var(--color-mint)",
     connecting: "var(--color-amber)",
@@ -257,6 +260,15 @@ function DeviceChip({ device, label, onRename }: { device: DeviceInfo; label?: s
           {device.battery !== null && <span>· {device.battery}%</span>}
         </div>
       </div>
+      {onDisconnect && !device.simulated && (
+        <button
+          onClick={onDisconnect}
+          className="ml-0.5 w-5 h-5 grid place-items-center rounded text-[var(--color-ink-faint)] hover:text-[var(--color-red)] transition-colors"
+          title="Disconnect sensor (stays connected between workouts otherwise)"
+        >
+          ✕
+        </button>
+      )}
     </div>
   );
 }

@@ -138,6 +138,22 @@ export function useEngine() {
   const onCadence = useCallback((t: number, spm: number) => engineRef.current.ingestCadence(t, spm), []);
   const onTemp = useCallback((t: number, c: number) => engineRef.current.ingestTemp(t, c), []);
 
+  // (Re-)arm the GPS pace watch (drives speed/distance/Pa:HR decoupling). Called
+  // on every connect — including the keep-connected REUSE path, which would
+  // otherwise never re-watch after a prior stop()/reset() tore the watch down.
+  const armGps = useCallback(() => {
+    if (!("geolocation" in navigator)) return;
+    clearGps();
+    gpsWatchId.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        const sp = pos.coords.speed;
+        if (sp !== null && Number.isFinite(sp)) onPace({ t: now(), speedMps: sp, source: "gps" });
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 1000 }
+    );
+  }, [onPace, clearGps]);
+
   const startDemo = useCallback(
     (opts?: { targetHrFn?: (elapsedSec: number) => number | null }) => {
       setError(null);
@@ -168,6 +184,16 @@ export function useEngine() {
 
   const connect = useCallback(async () => {
     setError(null);
+    // Reuse an already-connected sensor (we keep it connected across sessions) so
+    // the next workout starts instantly without re-opening the OS pairing chooser.
+    if (bleRef.current?.isConnected()) {
+      engineRef.current.reset();
+      engineRef.current.start(now());
+      setMode("live");
+      startLoop();
+      armGps(); // re-arm GPS — the prior stop()/reset() cleared the watch
+      return;
+    }
     if (!bluetoothSupported()) {
       setError(bluetoothUnavailableMessage());
       return;
@@ -185,27 +211,18 @@ export function useEngine() {
     engineRef.current.start(now());
     setMode("live");
     startLoop();
+    armGps(); // optional GPS pace for Pa:HR / decoupling
+  }, [onHR, onCadence, onTemp, startLoop, armGps]);
 
-    // Optional GPS pace for Pa:HR / decoupling.
-    if ("geolocation" in navigator) {
-      clearGps();
-      gpsWatchId.current = navigator.geolocation.watchPosition(
-        (pos) => {
-          const sp = pos.coords.speed;
-          if (sp !== null && Number.isFinite(sp)) {
-            onPace({ t: now(), speedMps: sp, source: "gps" });
-          }
-        },
-        () => {},
-        { enableHighAccuracy: true, maximumAge: 1000 }
-      );
-    }
-  }, [onHR, onPace, onCadence, onTemp, startLoop, clearGps]);
-
-  const stop = useCallback(() => {
+  const stop = useCallback((opts?: { keepSensor?: boolean }) => {
     simRef.current?.stop();
     simRef.current = null;
-    bleRef.current?.disconnect();
+    // Keep the BLE sensor connected across sessions by default — only a manual
+    // disconnect (or reset) drops it. (The simulator is always torn down.)
+    if (!opts?.keepSensor) {
+      bleRef.current?.disconnect();
+      bleRef.current = null;
+    }
     clearGps();
     engineRef.current.stop();
     stopLoop();
@@ -214,6 +231,13 @@ export function useEngine() {
     setSeries([...engineRef.current.getSeries()]);
     setMode("idle");
   }, [stopLoop, clearGps]);
+
+  /** Manual sensor disconnect — the only path that drops a real BLE device. */
+  const disconnect = useCallback(() => {
+    bleRef.current?.disconnect();
+    bleRef.current = null;
+    setDevice(null);
+  }, []);
 
   // Re-anchor the session clock + metrics to "now" WITHOUT dropping the live
   // source (used by the Free START gate so recording begins at the countdown,
@@ -228,17 +252,22 @@ export function useEngine() {
     setSnapshot(engineRef.current.tick(now()));
   }, []);
 
-  const reset = useCallback(() => {
+  const reset = useCallback((opts?: { keepSensor?: boolean }) => {
     simRef.current?.stop();
     simRef.current = null;
-    bleRef.current?.disconnect();
-    bleRef.current = null;
+    // Keep a real BLE sensor connected unless this is a full teardown; the
+    // simulator is always cleared.
+    const keep = opts?.keepSensor && bleRef.current?.isConnected();
+    if (!keep) {
+      bleRef.current?.disconnect();
+      bleRef.current = null;
+    }
     clearGps();
     engineRef.current.reset();
     stopLoop();
     setSnapshot(emptySnapshot(profile));
     setSeries([]);
-    setDevice(null);
+    if (!keep) setDevice(null);
     setMode("idle");
     setError(null);
   }, [profile, stopLoop, clearGps]);
@@ -276,6 +305,7 @@ export function useEngine() {
     startDemo,
     connect,
     stop,
+    disconnect,
     pause,
     resume,
     startRecovery,

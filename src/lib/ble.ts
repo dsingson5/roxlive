@@ -238,6 +238,11 @@ export class HeartRateBLE {
     }, delay);
   }
 
+  /** True when the GATT server is currently connected (for connection reuse). */
+  isConnected(): boolean {
+    return this.device?.gatt?.connected === true;
+  }
+
   disconnect(): void {
     this.manualDisconnect = true;
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);

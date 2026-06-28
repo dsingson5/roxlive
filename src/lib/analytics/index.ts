@@ -11,7 +11,7 @@ import type { PostRunAnalytics, SeriesPoint, SessionSummary } from "../../types"
 import type { Prof } from "./util";
 import { dominantZone, mbpFamily } from "./util";
 import { trainingLoad } from "./trainingLoad";
-import { efficiencyFactor, cardiacCost, classifyDecoupling, intensityContext } from "./efficiency";
+import { efficiencyFactor, cardiacCost, classifyDecoupling, intensityContext, decoupling } from "./efficiency";
 import { splitAnalysis } from "./splits";
 import { refuel } from "./refuel";
 import { lt1Polarization, respiratory, strideFatigue } from "./physiology";
@@ -30,6 +30,9 @@ export function analyzeSession(summary: SessionSummary, series: SeriesPoint[], p
   const mode = summary.modality && summary.modality !== "mixed" ? summary.modality : summary.mode;
   const fam = mbpFamily(String(mode)); // run | bike | erg — for decoupling bands + carb table
   const minutes = (summary.activeSec ?? summary.durationSec ?? 0) / 60;
+  // Auto-detect the warm-up end first — decoupling trims it (MBP behaviour).
+  let warmupEndSec = 0;
+  try { warmupEndSec = autoWarmupEnd(pts); a.warmupEndSec = warmupEndSec; } catch { /* skip */ }
 
   try {
     const tl = trainingLoad(pts, prof);
@@ -65,7 +68,12 @@ export function analyzeSession(summary: SessionSummary, series: SeriesPoint[], p
   } catch { /* skip */ }
 
   try {
-    if (summary.decouplingPct != null) a.decouplingClass = classifyDecoupling(summary.decouplingPct, fam);
+    // Aerobic decoupling like MBP: warm-up trimmed, halves EF. Falls back to the
+    // engine's live value if the clean segment is too short to compute.
+    const dec = decoupling(pts, warmupEndSec);
+    if (dec) { a.decouplingPct = dec.pct; a.decouplingMethod = dec.method; }
+    const pct = dec ? dec.pct : summary.decouplingPct;
+    if (pct != null) a.decouplingClass = classifyDecoupling(pct, fam);
   } catch { /* skip */ }
 
   try {
@@ -120,10 +128,6 @@ export function analyzeSession(summary: SessionSummary, series: SeriesPoint[], p
       a.efDecayPctPerHr = deg.pctPerHr;
       a.efDecayR2 = deg.r2;
     }
-  } catch { /* skip */ }
-
-  try {
-    a.warmupEndSec = autoWarmupEnd(pts);
   } catch { /* skip */ }
 
   try {

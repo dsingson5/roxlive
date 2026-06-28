@@ -199,6 +199,10 @@ export class MetricsEngine {
     // hrMax is tracked in tick() under the !paused guard (like hrAvg), so a
     // post-effort recovery spike during a pause can't pollute the session max.
     for (const r of s.rr) this.rr.push({ t: s.t, v: r });
+    // Prune here too (not only in tick): a kept-connected sensor keeps streaming
+    // R-R while the loop is stopped between sessions, and tick()'s pruneRR only
+    // runs while `running`. Without this the buffer grows unbounded during idle.
+    this.pruneRR(s.t);
   }
 
   ingestPace(s: PaceSample) {

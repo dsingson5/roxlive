@@ -82,6 +82,67 @@ export function cardiacCost(pts: SeriesPoint[]): CardiacCost | null {
   return { beatsPerKm: +bpkm.toFixed(1), risePct: rise };
 }
 
+export interface DecouplingResult {
+  pct: number; // positive = aerobic drift (EF declined 1st→2nd half)
+  ef1: number;
+  ef2: number;
+  method: "EF" | "HR drift";
+}
+
+/**
+ * Aerobic decoupling, computed like MBP's compute_decoupling_1hz: trim the warm-up
+ * first (`warmupEndSec`), then split the clean segment into halves, EF = output/HR
+ * per half, decoupling% = (EF1 − EF2)/EF1 · 100 (positive when EF declines). Uses
+ * speed/HR when speed exists (Pa:HR), else 1000/HR cardiac drift. Warm-up is NOT
+ * counted — that's the whole point of trimming it.
+ */
+export function decoupling(pts: SeriesPoint[], warmupEndSec = 0): DecouplingResult | null {
+  if (!pts.length) return null;
+  // Trim the warm-up on the SAME active (dt-clamped) timeline autoWarmupEnd uses,
+  // NOT raw wall-clock: a mid-session pause leaves gaps in the series timestamps
+  // that would otherwise shift or void the trim.
+  const dAll = dts(pts);
+  let elapsed = 0;
+  const clean = pts.filter((p, i) => {
+    const before = elapsed;
+    elapsed += dAll[i];
+    return before >= warmupEndSec && p.hr != null && Number.isFinite(p.hr) && (p.hr as number) > 0 && (p.hr as number) < 250;
+  });
+  if (clean.length < 20) return null;
+  const d = dts(clean);
+  const total = d.reduce((a, b) => a + b, 0);
+  if (total < 120) return null; // need a couple of clean minutes to say anything
+  let acc = 0;
+  let mid = clean.length - 1;
+  for (let i = 0; i < clean.length; i++) {
+    acc += d[i];
+    if (acc >= total / 2) { mid = i; break; }
+  }
+  const h1 = clean.slice(0, mid + 1);
+  const h2 = clean.slice(mid + 1);
+  if (h1.length < 5 || h2.length < 5) return null;
+  const hasSpeed = clean.some((p) => p.speedMps != null && (p.speedMps as number) > 0);
+  const efHalf = (h: SeriesPoint[]): number => {
+    const dh = dts(h);
+    if (hasSpeed) {
+      // numerator (speed) + denominator (HR) over the SAME moving rows
+      let so = 0, sh = 0, w = 0;
+      for (let i = 0; i < h.length; i++) {
+        const sp = h[i].speedMps;
+        const hr = h[i].hr;
+        if (sp != null && (sp as number) > 0 && hr != null && (hr as number) > 0) { so += (sp as number) * dh[i]; sh += (hr as number) * dh[i]; w += dh[i]; }
+      }
+      return w > 0 && sh > 0 ? so / sh : NaN; // (Σspeed·dt)/(Σhr·dt) = avgSpeed/avgHr
+    }
+    const avgHr = wmean(h, dh, (p) => p.hr);
+    return isNum(avgHr) && avgHr > 0 ? 1000 / avgHr : NaN;
+  };
+  const ef1 = efHalf(h1);
+  const ef2 = efHalf(h2);
+  if (!isNum(ef1) || !isNum(ef2) || ef1 === 0) return null;
+  return { pct: +((100 * (ef1 - ef2)) / ef1).toFixed(1), ef1: +ef1.toFixed(4), ef2: +ef2.toFixed(4), method: hasSpeed ? "EF" : "HR drift" };
+}
+
 /** MBP classify_decoupling: mode-aware bands + negative-drift handling. */
 export function classifyDecoupling(decouplingPct: number, mode: string): string {
   const m = (mode || "").toLowerCase();

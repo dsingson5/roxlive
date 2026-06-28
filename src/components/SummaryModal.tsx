@@ -365,10 +365,20 @@ function buildWorkoutNotes(s: SessionSummary): string {
   if (a.length) L.push(a.join(" · "));
   const b: string[] = [];
   if (s.adherencePct != null) b.push(`target adherence ${Math.round(s.adherencePct)}%`);
-  if (s.decouplingPct != null) b.push(`decoupling ${fmtSigned(s.decouplingPct, 1)}%`);
+  const decExcl = s.analytics?.decouplingPct != null;
+  const dec = decExcl ? (s.analytics as NonNullable<typeof s.analytics>).decouplingPct! : s.decouplingPct;
+  if (dec != null) b.push(`decoupling ${fmtSigned(dec, 1)}%${decExcl ? " (warm-up excl.)" : ""}`);
   if (s.minAlpha1 != null) b.push(`min α1 ${s.minAlpha1.toFixed(2)}`);
   if (s.avgBrpm != null) b.push(`avg breath ${Math.round(s.avgBrpm)}/min`);
   if (b.length) L.push(b.join(" · "));
+  const an = s.analytics;
+  if (an) {
+    const e: string[] = [];
+    if (an.tss != null) e.push(`load ${an.tss} hrTSS`);
+    if (an.ef != null) e.push(`EF ${an.ef}${an.efMode === "speed" ? " m/min·bpm" : ""}`);
+    if (an.cardiacCostBpkm != null) e.push(`${an.cardiacCostBpkm} beats/km`);
+    if (e.length) L.push(e.join(" · "));
+  }
   const r = s.recovery;
   if (r && (r.hrr30 != null || r.hrr60 != null)) {
     const p: string[] = [];
@@ -384,6 +394,9 @@ function buildWorkoutNotes(s: SessionSummary): string {
       const d = x.distanceM > 0 ? ` · ${fmtDist(x.distanceM)}` : "";
       L.push(`${i + 1}. ${x.label} — ${fmtClock(x.splitSec as number)}${hr}${d}`);
     });
+  }
+  if (s.coachNote && s.coachNote.trim()) {
+    L.push("", "— Claude coach analysis —", s.coachNote.trim());
   }
   L.push("", "Recorded with RoxLive by Hybrid Crew");
   return L.join("\n");
