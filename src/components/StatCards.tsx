@@ -27,7 +27,7 @@ export function DecouplingCard({ snap }: { snap: MetricsSnapshot }) {
         <div className="text-[10px] mono text-[var(--color-ink-faint)] text-right">
           {d.mode === "speed" ? "Pa:HR" : "HR-drift"}
           <br />
-          {d.ready ? "10 min+" : "building…"}
+          {d.ready ? "warm-up excl." : "building…"}
         </div>
       </div>
       <div className="mt-2 text-[11px] text-[var(--color-ink-dim)]">

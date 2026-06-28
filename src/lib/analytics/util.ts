@@ -25,9 +25,14 @@ export function dts(pts: SeriesPoint[]): number[] {
   for (let i = 1; i < n; i++) d[i] = (pts[i].t - pts[i - 1].t) / 1000;
   const rest = d.slice(1).filter((x) => x > 0).sort((a, b) => a - b);
   const med = rest.length ? rest[Math.floor(rest.length / 2)] : 1;
-  const base = Math.min(5, Math.max(0.5, med || 1));
+  // base = the series' OWN sample cadence (1 Hz live; ~5-12 s for a stored/
+  // downsampled trace). Clamp only gaps that are clearly PAUSES — bigger than
+  // 3× the cadence (and at least 10 s). A hard 10 s ceiling would collapse a
+  // uniformly >10 s-strided long session to a fixed step and halve its timeline.
+  const base = Math.max(0.5, med || 1);
+  const cap = Math.max(10, base * 3);
   d[0] = base;
-  for (let i = 1; i < n; i++) if (!(d[i] > 0) || d[i] > 10) d[i] = base; // clamp pauses/gaps
+  for (let i = 1; i < n; i++) if (!(d[i] > 0) || d[i] > cap) d[i] = base;
   return d;
 }
 

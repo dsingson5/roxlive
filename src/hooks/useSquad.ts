@@ -319,10 +319,28 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
   }, [ensureLoop, voice.leadInSec]);
 
   const connectSensor = useCallback(async (id: string) => {
-    if (!bluetoothSupported()) return;
     const rec = recs.current.get(id);
     if (!rec) return;
+    // Reuse a sensor we kept connected from a prior workout (stopAll keeps them) —
+    // no re-pairing chooser. Just re-anchor the engine and go live.
+    if (rec.ble?.isConnected()) {
+      rec.sim?.stop(); rec.sim = null;
+      rec.engine.reset();
+      rec.engine.start(now());
+      rec.inTarget = 0; rec.total = 0;
+      clearFiredFor(id);
+      coach.current!.prime();
+      setRunning(true);
+      ensureLoop();
+      patch(id, (x) => ({ ...x, source: "live", deviceName: rec.ble!.deviceName() ?? x.deviceName }));
+      return;
+    }
+    if (!bluetoothSupported()) return;
     rec.sim?.stop(); rec.sim = null;
+    // Tear down any prior BLE that's present but NOT cleanly connected (e.g. mid
+    // auto-reconnect): else its reconnect timer + listeners survive and its old
+    // onSample keeps injecting stale HR into this engine once it re-establishes.
+    if (rec.ble) { rec.ble.disconnect(); rec.ble = null; }
     // Reset + start the engine BEFORE notifications can arrive, so no early
     // sample is dropped while the engine is in a not-yet-started state.
     rec.engine.reset();
@@ -331,7 +349,7 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
     clearFiredFor(id);
     const ble = new HeartRateBLE(
       (s) => rec.engine.ingestHR(s),
-      (d) => { patch(id, (x) => ({ ...x, deviceName: d.name })); },
+      (d) => { const cur = athRef.current.find((x) => x.id === id); if (!cur || cur.deviceName !== d.name) patch(id, (x) => ({ ...x, deviceName: d.name })); },
       () => {},
       (t, spm) => rec.engine.ingestCadence(t, spm),
       (t, c) => rec.engine.ingestTemp(t, c)
@@ -464,7 +482,13 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
   }, [ensureLoop, voice.leadInSec]);
 
   const stopAll = useCallback(() => {
-    athRef.current.forEach((a) => teardown(a.id));
+    // Keep the HRMs CONNECTED across workouts — only a manual remove / unmount
+    // disconnects. Stop the sims + engines but leave each rec.ble alive so the
+    // next connectSensor reuses it without re-pairing.
+    athRef.current.forEach((a) => {
+      const rec = recs.current.get(a.id);
+      if (rec) { rec.sim?.stop(); rec.sim = null; rec.engine.stop(); }
+    });
     if (raf.current !== null) { cancelAnimationFrame(raf.current); raf.current = null; }
     if (bg.current !== null) { clearInterval(bg.current); bg.current = null; }
     coach.current!.cancel();
@@ -474,7 +498,12 @@ export function useSquad(voice: VoiceSettings, baseProfile: AthleteProfile) {
     snapsRef.current = {};
     adhRef.current = {};
     setPausedIds({});
-    setAthletes((prev) => prev.map((a) => ({ ...a, source: "idle", anchor: null, deviceName: null })));
+    // source→idle ends the workout UI; deviceName is kept for athletes whose HRM
+    // is still connected (so it's clear they're paired + connectSensor reuses it).
+    setAthletes((prev) => prev.map((a) => {
+      const stillConnected = recs.current.get(a.id)?.ble?.isConnected() === true;
+      return { ...a, source: "idle", anchor: null, deviceName: stillConnected ? a.deviceName : null };
+    }));
     // Clear live state so the cards drop back to their idle controls (the tick
     // loop is stopped, so it won't update these on its own).
     setSnapshots({});

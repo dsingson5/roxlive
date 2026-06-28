@@ -2,7 +2,7 @@
 import type { SeriesPoint, SessionSummary } from "../../types";
 import { analyzeSession } from "./index";
 import { trainingLoad, computePmc, dailyTssDense } from "./trainingLoad";
-import { pwlfOneKnot } from "./durability";
+import { pwlfOneKnot, autoWarmupEnd } from "./durability";
 import { classifyDecoupling, efficiencyFactor, decoupling } from "./efficiency";
 import { mbpFamily } from "./util";
 import { refuel } from "./refuel";
@@ -137,6 +137,22 @@ const prof = { maxHr: 185, restHr: 48, weightKg: 74, sex: "male" as const };
   const ptsHr: SeriesPoint[] = Array.from({ length: N }, (_, i): SeriesPoint => ({ t: i * 1000, hr: Math.round(150 + 12 * (i / N)), alpha1: null, speedMps: null, brpm: null, zone: null, cadence: null }));
   const decHr = decoupling(ptsHr, 0);
   ok("decoupling HR-only mode", !!decHr && decHr.method === "HR drift" && decHr.pct > 0, decHr ? `${decHr.pct}% (${decHr.method})` : "null");
+}
+
+// 8) Long-session downsample must NOT collapse the timeline (dts gap-clamp fix):
+// a 3 h run downsampled at the real stride should give ~the same warm-up + decoupling
+// as the full 1 Hz series (regression for the >2h47m dts() 10 s-clamp bug).
+{
+  const N = 10800; // 3 h @ 1 Hz
+  const full: SeriesPoint[] = Array.from({ length: N }, (_, i): SeriesPoint => ({ t: i * 1000, hr: i < 600 ? 125 : Math.round(150 + 10 * (i / N)), alpha1: null, speedMps: 3.2, brpm: null, zone: null, cadence: null }));
+  const stride = Math.max(5, Math.ceil(full.length / 1000)); // = 11 for 3 h — same as buildSummary
+  const ds = full.filter((_, i) => i % stride === 0);
+  const wFull = autoWarmupEnd(full);
+  const wDs = autoWarmupEnd(ds);
+  const decFull = decoupling(full, wFull);
+  const decDs = decoupling(ds, wDs);
+  ok("3h downsample: warm-up not collapsed", Math.abs(wFull - wDs) <= Math.max(120, wFull * 0.3), `full ${wFull}s vs ds ${wDs}s (stride ${stride}s)`);
+  ok("3h downsample: decoupling matches full", !!decFull && !!decDs && Math.abs(decFull.pct - decDs.pct) <= 1.5, `full ${decFull?.pct}% vs ds ${decDs?.pct}%`);
 }
 
 console.log(fail === 0 ? "\nALL PASS" : `\n${fail} FAILURE(S)`);

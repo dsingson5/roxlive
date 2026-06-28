@@ -243,6 +243,11 @@ export class HeartRateBLE {
     return this.device?.gatt?.connected === true;
   }
 
+  /** Connected device's friendly name (for reuse without a fresh connect callback). */
+  deviceName(): string | null {
+    return this.info?.name ?? this.device?.name ?? null;
+  }
+
   disconnect(): void {
     this.manualDisconnect = true;
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);

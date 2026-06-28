@@ -199,6 +199,9 @@ export function useEngine() {
       return;
     }
     engineRef.current.reset();
+    // Tear down any prior BLE that's present but not cleanly connected (mid
+    // auto-reconnect) so its reconnect timer + stale onHR callback can't survive.
+    if (bleRef.current) { bleRef.current.disconnect(); bleRef.current = null; }
     const ble = new HeartRateBLE(
       (s) => onHR(s),
       (d) => setDevice(d),

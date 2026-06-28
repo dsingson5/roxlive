@@ -22,13 +22,16 @@ import type {
 import { computeDFA } from "./dfa";
 import { computeHRV } from "./hrv";
 import { computeRespiration } from "./respiration";
-import { computeDecoupling, type EffSample } from "./decoupling";
+import { decoupling as mbpDecoupling } from "./analytics/efficiency";
+import { autoWarmupEnd } from "./analytics/durability";
 import { IntervalDetector } from "./intervals";
 import { zoneBounds, zoneForHr, pctMax } from "./zones";
 
 const RR_WINDOW_SEC = 120; // DFA / HRV / respiration rolling window
 const HEAVY_MS = 1500; // throttle for heavy metrics
 const SERIES_MS = 1000; // 1 Hz history cadence
+const DECOUP_MS = 10000; // decoupling is slow-moving + O(series) → recompute every 10 s
+const DECOUP_READY_SEC = 600; // 10 min of post-warm-up clean data before "ready"
 const MAX_SERIES = 60 * 60 * 4; // 4 h @ 1 Hz — long rides/bricks keep their FULL trace
 //   (the old 90-min cap silently dropped the opening minutes of longer sessions,
 //    which truncated the exported .FIT and made Strava read a too-short duration).
@@ -44,7 +47,6 @@ export class MetricsEngine {
   private detector: IntervalDetector;
 
   private rr: Stamped[] = []; // timestamped R-R intervals (ms)
-  private effBuf: EffSample[] = []; // 1 Hz {t,hr,speed} for decoupling
 
   private hr: number | null = null;
   private hrT = 0; // timestamp of the last HR sample (for staleness checks)
@@ -89,7 +91,7 @@ export class MetricsEngine {
   };
   private lastHeavy = 0;
   private lastSeries = 0;
-  private lastEff = 0;
+  private lastDecoup = 0;
 
   private series: SeriesPoint[] = [];
 
@@ -162,7 +164,6 @@ export class MetricsEngine {
 
   reset() {
     this.rr = [];
-    this.effBuf = [];
     this.hr = null;
     this.hrT = 0;
     this.lastSpeed = null;
@@ -188,7 +189,7 @@ export class MetricsEngine {
     this.decoupling = { pct: null, firstHalf: null, secondHalf: null, ready: false, mode: "speed" };
     this.lastHeavy = 0;
     this.lastSeries = 0;
-    this.lastEff = 0;
+    this.lastDecoup = 0;
     this.series = [];
     this.detector.reset();
   }
@@ -287,23 +288,27 @@ export class MetricsEngine {
         }
       }
 
-      // 1 Hz efficiency buffer (for decoupling) — active only, and stamped on the
-      // ACTIVE timeline (not wall clock) so a pause doesn't inflate the span or
-      // shift the first/second-half split that computeDecoupling derives from t.
-      if (now - this.lastEff >= 1000 && this.hr !== null && !this.paused) {
-        this.lastEff = now;
-        this.effBuf.push({ t: this.startT + this.activeSec * 1000, hr: this.hr, speedMps: this.lastSpeed });
-        if (this.effBuf.length > MAX_SERIES) this.effBuf.shift();
-      }
-
-      // heavy metrics (throttled)
+      // heavy metrics (throttled): DFA / HRV / respiration over the R-R window.
       if (now - this.lastHeavy >= HEAVY_MS) {
         this.lastHeavy = now;
         const rrv = this.rrValues();
         this.dfa = computeDFA(rrv);
         this.hrv = computeHRV(rrv);
         this.resp = computeRespiration(rrv);
-        this.decoupling = computeDecoupling(this.effBuf);
+      }
+
+      // Aerobic decoupling like MBP: exclude the auto-detected warm-up, then
+      // halves-EF (ratio of means) on the clean segment — on the SAME active
+      // timeline the post-run analytics use, so the live number matches the saved
+      // one. Slow-moving + O(series), so throttled well below the R-R metrics.
+      if (now - this.lastDecoup >= DECOUP_MS) {
+        this.lastDecoup = now;
+        const warmupEndSec = autoWarmupEnd(this.series);
+        const dec = mbpDecoupling(this.series, warmupEndSec);
+        const cleanSpan = Math.max(0, this.activeSec - warmupEndSec);
+        this.decoupling = dec
+          ? { pct: dec.pct, firstHalf: dec.ef1, secondHalf: dec.ef2, ready: cleanSpan >= DECOUP_READY_SEC, mode: dec.method === "EF" ? "speed" : "hr-drift" }
+          : { pct: null, firstHalf: null, secondHalf: null, ready: false, mode: "speed" };
       }
 
       // 1 Hz series for charts — active only, so the saved trace excludes pauses
