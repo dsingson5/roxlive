@@ -26,13 +26,11 @@ export const CREW_USERS = [
   "carla",
   "erika",
   "liz",
-  "marianne",
-  "aleena",
   "fayth",
   "aura",
   "levelshyroxpt-sample",
   "ommohyroxpc-sample",
-] as const;
+] as const; // access removed: marianne, aleena (also dropped from sync/worker.js CREW)
 
 export type CrewUser = (typeof CREW_USERS)[number];
 
@@ -108,8 +106,6 @@ export const CALENDAR_PAGES: Partial<Record<CrewUser, string>> = {
   carla: "jakarta-taper-competitive.html",
   erika: "jakarta-taper-competitive.html",
   liz: "jakarta-taper-firsttimers.html",
-  marianne: "jakarta-taper-firsttimers.html",
-  aleena: "jakarta-taper-mixed.html",
   aura: "aura-training-calendar.html",
   fayth: "fayths-training-plan.html",
   "levelshyroxpt-sample": "levels-hyrox-2027-calendar.html",
