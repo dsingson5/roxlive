@@ -11,13 +11,15 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.dsingson.roxliveformlab",
       "infoPlist": {
-        "NSCameraUsageDescription": "RoxLive uses the camera to count your reps and check your lifting form on-device. Video never leaves your phone.",
+        "NSCameraUsageDescription": "RoxLive uses the camera to count reps and check form on-device.",
         "NSMicrophoneUsageDescription": "Optional: spoken voice commands during a set."
       }
     },
     "android": {
       "package": "com.dsingson.roxliveformlab",
-      "permissions": ["android.permission.CAMERA"]
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "plugins": [
       [
@@ -29,15 +31,28 @@
       ],
       [
         "react-native-fast-tflite",
-        { "enableCoreMLDelegate": true }
+        {
+          "enableCoreMLDelegate": true
+        }
       ],
       [
         "expo-build-properties",
         {
-          "ios": { "deploymentTarget": "15.1" },
-          "android": { "minSdkVersion": 26 }
+          "ios": {
+            "deploymentTarget": "15.1"
+          },
+          "android": {
+            "minSdkVersion": 26
+          }
         }
-      ]
-    ]
+      ],
+      "expo-asset"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "34c4f494-0b47-4287-8201-6b419ff86bc8"
+      }
+    },
+    "owner": "dsingson5"
   }
 }
