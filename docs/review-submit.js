@@ -1,0 +1,511 @@
+/* RoxReview submit widget — a floating "Send to coach" button + modal that any
+ * athlete can use to send a movement clip to David's Form Review queue and read
+ * his feedback. Drop-in: include review-client.js then this file. Optional
+ * data-session="A" on the script tag pre-tags the clip with the session.
+ *
+ * Reused across the strength pages (A–D) and RoxLive — one widget everywhere.
+ *
+ * Recording: an in-page recorder (front camera by default) shown as a SMALL
+ * MOVABLE window so the athlete can still see the workout while filming. The
+ * clip is bitrate-capped, so a full 2-minute set lands well under the size
+ * limit. A "choose file" fallback is kept for pre-recorded clips.
+ *
+ * Naming: the movement is picked from the CURRENT page's workouts — from
+ * window.RXS_WORKOUTS if the page sets it, otherwise scraped from the strength
+ * pages' exercise cards — plus a free-text "Other…" option.
+ */
+(function () {
+  var SESSION = "";
+  try { SESSION = (document.currentScript && document.currentScript.getAttribute("data-session")) || ""; } catch (e) {}
+  if (!window.RoxReview) { console.warn("[review-submit] review-client.js not loaded"); return; }
+
+  var MAX_MB = 1024;                // per-clip cap in MB (matches the worker's REVIEW_MAX_BYTES = 1 GB)
+  var REC_BITRATE = 2500000;        // ~2.5 Mbps video → a 2-min clip ≈ 40 MB
+  var REC_MAX_SEC = 180;            // hard ceiling so a forgotten recording can't balloon
+
+  var CSS = ""
+    + ".rxs-fab{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));z-index:9000;"
+    + "font-family:'Marcellus',Georgia,serif;font-size:11px;line-height:1.15;letter-spacing:.04em;color:#1a1206;background:linear-gradient(180deg,#e6c088,#d4a868);"
+    + "border:none;border-radius:100px;padding:8px 13px;max-width:62vw;box-shadow:0 6px 20px rgba(0,0,0,.42);cursor:pointer;display:flex;align-items:center;gap:6px;}"
+    + ".rxs-fab:hover{filter:brightness(1.06);}"
+    + ".rxs-ov{position:fixed;inset:0;z-index:9001;background:rgba(4,2,10,.72);backdrop-filter:blur(4px);display:none;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 14px;}"
+    + ".rxs-ov.on{display:flex;}"
+    + ".rxs-card{width:min(560px,96vw);background:linear-gradient(180deg,#15102a,#0a0618);border:1px solid rgba(139,111,44,.4);border-radius:18px;color:#e8dcc0;font-family:'EB Garamond',Georgia,serif;padding:18px 18px 20px;box-shadow:0 24px 70px rgba(0,0,0,.6);}"
+    + ".rxs-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px;}"
+    + ".rxs-h h3{font-family:'Cinzel Decorative',serif;font-size:18px;color:#f4ebd6;font-weight:700;}"
+    + ".rxs-x{background:none;border:1px solid rgba(139,111,44,.4);color:#d4a868;border-radius:10px;width:32px;height:32px;cursor:pointer;font-size:16px;}"
+    + ".rxs-sub{font-style:italic;color:#d4c4a0;font-size:13px;margin-bottom:14px;}"
+    + ".rxs-lab{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#6a6478;margin:12px 0 5px;}"
+    + ".rxs-inp,.rxs-sel{width:100%;background:rgba(6,3,15,.6);border:1px solid rgba(139,111,44,.3);border-radius:10px;color:#f4ebd6;font-family:inherit;font-size:15px;padding:10px 12px;}"
+    + ".rxs-inp:focus,.rxs-sel:focus{outline:none;border-color:#d4a868;}"
+    + ".rxs-sel{appearance:none;-webkit-appearance:none;background-image:url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1l5 5 5-5' fill='none' stroke='%23d4a868' stroke-width='1.6'/></svg>\");background-repeat:no-repeat;background-position:right 12px center;padding-right:30px;}"
+    + ".rxs-btn{font-family:'Marcellus',serif;font-size:13px;letter-spacing:.06em;border-radius:10px;padding:11px 16px;cursor:pointer;border:1px solid rgba(139,111,44,.4);background:rgba(12,8,32,.5);color:#d4c4a0;}"
+    + ".rxs-btn.gold{background:linear-gradient(180deg,#e6c088,#d4a868);color:#1a1206;border-color:transparent;font-weight:600;}"
+    + ".rxs-btn:disabled{opacity:.45;cursor:default;}"
+    + ".rxs-prev{width:100%;border-radius:12px;margin-top:10px;background:#000;max-height:240px;}"
+    + ".rxs-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px;}"
+    + ".rxs-bar{height:8px;border-radius:6px;background:rgba(46,38,64,.6);overflow:hidden;margin-top:10px;display:none;}"
+    + ".rxs-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#d4a868,#e6c088);transition:width .2s;}"
+    + ".rxs-msg{font-size:13px;margin-top:10px;padding:8px 11px;border-radius:9px;display:none;}"
+    + ".rxs-msg.ok{color:#7bd88f;background:rgba(123,216,143,.08);border:1px solid rgba(123,216,143,.3);}"
+    + ".rxs-msg.err{color:#e0b24a;background:rgba(224,178,74,.08);border:1px solid rgba(224,178,74,.3);}"
+    + ".rxs-list{margin-top:16px;border-top:1px solid rgba(139,111,44,.25);padding-top:12px;}"
+    + ".rxs-item{border:1px solid rgba(139,111,44,.25);border-radius:12px;padding:10px 12px;margin-top:8px;background:rgba(12,8,32,.4);}"
+    + ".rxs-item .t{display:flex;justify-content:space-between;gap:8px;align-items:center;}"
+    + ".rxs-bdg{font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:3px 7px;border-radius:100px;font-family:'Marcellus',serif;}"
+    + ".rxs-bdg.pending{color:#e0b24a;border:1px solid rgba(224,178,74,.4);}"
+    + ".rxs-bdg.reviewed{color:#7bd88f;border:1px solid rgba(123,216,143,.4);}"
+    + ".rxs-fb{margin-top:8px;font-size:14px;color:#e8dcc0;background:rgba(6,3,15,.5);border-left:2px solid #d4a868;padding:8px 11px;border-radius:0 8px 8px 0;white-space:pre-wrap;}"
+    + ".rxs-del{background:none;border:none;color:#b54156;cursor:pointer;font-size:12px;}"
+    + ".rxs-muted{color:#6a6478;font-size:13px;font-style:italic;}"
+    // ---- movable recorder window ----
+    + ".rxs-rec{position:fixed;z-index:9100;width:184px;background:#0a0618;border:1px solid rgba(212,168,104,.55);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.7);overflow:hidden;display:none;touch-action:none;}"
+    + ".rxs-rec.on{display:block;}"
+    + ".rxs-rec-hd{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 8px;cursor:grab;background:rgba(212,168,104,.12);font-family:'Marcellus',serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#d4c4a0;}"
+    + ".rxs-rec-hd:active{cursor:grabbing;}"
+    + ".rxs-rec-vid{width:100%;display:block;background:#000;aspect-ratio:3/4;object-fit:cover;transform:scaleX(-1);}"
+    + ".rxs-rec-ct{display:flex;align-items:center;justify-content:center;gap:10px;padding:8px;}"
+    + ".rxs-rec-btn{width:40px;height:40px;border-radius:100px;border:2px solid #fff;background:#e0444f;cursor:pointer;padding:0;}"
+    + ".rxs-rec-btn.stop{border-radius:8px;background:#e0444f;width:34px;height:34px;}"
+    + ".rxs-mini{background:none;border:1px solid rgba(212,168,104,.4);color:#d4c4a0;border-radius:8px;min-width:34px;height:34px;cursor:pointer;font-size:14px;padding:0 6px;}"
+    + ".rxs-rec-dot{width:8px;height:8px;border-radius:100px;background:#e0444f;display:inline-block;margin-right:5px;animation:rxsPulse 1s infinite;}"
+    + "@keyframes rxsPulse{50%{opacity:.25;}}"
+    // ---- feedback notifications + viewer ----
+    + ".rxs-badge{position:absolute;top:-7px;right:-7px;min-width:19px;height:19px;padding:0 5px;border-radius:100px;background:#e0444f;color:#fff;font:700 11px/19px system-ui,sans-serif;text-align:center;box-shadow:0 1px 5px rgba(0,0,0,.5);display:none;}"
+    + ".rxs-cardbadge{display:inline-flex;align-items:center;gap:7px;margin-top:8px;font:600 11px/1 'Marcellus',Georgia,serif;letter-spacing:.04em;padding:7px 11px;border-radius:100px;border:1px solid rgba(212,168,104,.5);background:rgba(212,168,104,.12);color:#e6c088;cursor:pointer;}"
+    + ".rxs-cardbadge.new{border-color:#e0444f;color:#ffd9dc;background:rgba(224,68,79,.16);}"
+    + ".rxs-cardbadge .d{width:8px;height:8px;border-radius:100px;background:#e0444f;}"
+    + ".rxs-newdot{display:inline-block;width:8px;height:8px;border-radius:100px;background:#e0444f;margin-left:6px;vertical-align:middle;}"
+    + ".rxs-view{background:none;border:1px solid rgba(212,168,104,.45);color:#e6c088;border-radius:8px;font:600 12px/1 'Marcellus',serif;padding:7px 11px;cursor:pointer;margin-top:8px;}"
+    + ".rxs-vov{position:fixed;inset:0;z-index:9200;background:rgba(4,2,10,.8);backdrop-filter:blur(4px);display:none;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 14px;}"
+    + ".rxs-vov.on{display:flex;}"
+    + ".rxs-vcard{width:min(640px,96vw);background:linear-gradient(180deg,#15102a,#0a0618);border:1px solid rgba(139,111,44,.4);border-radius:18px;color:#e8dcc0;font-family:'EB Garamond',Georgia,serif;padding:18px;box-shadow:0 24px 70px rgba(0,0,0,.6);}"
+    + ".rxs-vwrap{position:relative;margin-top:10px;border-radius:12px;overflow:hidden;background:#000;}"
+    + ".rxs-vwrap video{width:100%;display:block;max-height:58vh;}"
+    + ".rxs-vwrap canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}"
+    + ".rxs-vfb{margin-top:12px;font-size:14px;line-height:1.5;color:#e8dcc0;background:rgba(6,3,15,.5);border-left:2px solid #d4a868;padding:10px 12px;border-radius:0 8px 8px 0;white-space:pre-wrap;}"
+    + ".rxs-thread{margin-top:6px;display:flex;flex-direction:column;gap:8px;max-height:240px;overflow-y:auto;}"
+    + ".rxs-bub{padding:8px 11px;border-radius:12px;font-size:14px;max-width:88%;white-space:pre-wrap;}"
+    + ".rxs-bub.athlete{align-self:flex-end;background:rgba(212,168,104,.16);border:1px solid rgba(212,168,104,.3);}"
+    + ".rxs-bub.coach{align-self:flex-start;background:rgba(123,216,143,.1);border:1px solid rgba(123,216,143,.3);}"
+    + ".rxs-bub .who{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#9a92a8;margin-bottom:3px;}";
+
+  var style = document.createElement("style"); style.textContent = CSS; document.head.appendChild(style);
+
+  var fab = document.createElement("button");
+  fab.className = "rxs-fab";
+  fab.innerHTML = '<span aria-hidden="true">&#127909;</span> Video your form &amp; send to coach';
+  document.body.appendChild(fab);
+
+  var ov = document.createElement("div");
+  ov.className = "rxs-ov";
+  ov.innerHTML =
+    '<div class="rxs-card" role="dialog" aria-modal="true">'
+    + '<div class="rxs-h"><h3>Send your form to coach</h3><button class="rxs-x" aria-label="Close">&times;</button></div>'
+    + '<div class="rxs-sub" id="rxsSub">Record a set (front camera, in a little movable window so you can still see your workout), tag the movement, and David will mark it up.</div>'
+    + '<div id="rxsForm">'
+    + '<div class="rxs-lab">Movement</div>'
+    + '<select class="rxs-sel" id="rxsMoveSel"></select>'
+    + '<input class="rxs-inp" id="rxsMove" placeholder="Name the movement" style="margin-top:8px;display:none" />'
+    + '<div class="rxs-row">'
+    + '<button class="rxs-btn gold" id="rxsRec">&#128247; Record (front cam)</button>'
+    + '<button class="rxs-btn" id="rxsPick">Choose a clip</button>'
+    + '<button class="rxs-btn gold" id="rxsSend" disabled>Send to coach</button>'
+    + '<input type="file" accept="video/*" id="rxsFile" style="display:none" />'
+    + '</div>'
+    + '<video class="rxs-prev" id="rxsPrev" controls playsinline style="display:none"></video>'
+    + '<div class="rxs-bar" id="rxsBar"><i></i></div>'
+    + '<div class="rxs-msg" id="rxsMsg"></div>'
+    + '</div>'
+    + '<div class="rxs-list" id="rxsList"></div>'
+    + '</div>';
+  document.body.appendChild(ov);
+
+  // Movable recorder window (separate from the modal so it stays on top of the
+  // workout page while the modal is closed).
+  var rec = document.createElement("div");
+  rec.className = "rxs-rec";
+  rec.innerHTML =
+    '<div class="rxs-rec-hd" id="rxsRecHd"><span id="rxsRecTime">&#9210; ready</span><span style="opacity:.7">drag &#10021;</span></div>'
+    + '<video class="rxs-rec-vid" id="rxsRecVid" muted autoplay playsinline></video>'
+    + '<div class="rxs-rec-ct">'
+    + '<button class="rxs-mini" id="rxsFlip" title="Flip camera">&#8635;</button>'
+    + '<button class="rxs-rec-btn" id="rxsRecToggle" title="Start recording" aria-label="Start recording"></button>'
+    + '<button class="rxs-mini" id="rxsRecCancel" title="Cancel">&times;</button>'
+    + '</div>';
+  document.body.appendChild(rec);
+
+  // Unread-feedback badge on the FAB.
+  var fabBadge = document.createElement("span");
+  fabBadge.className = "rxs-badge";
+  fab.appendChild(fabBadge);
+
+  // Feedback viewer overlay: the coach's marked-up clip + written feedback + a
+  // Q&A thread the athlete can use to ask follow-ups. Re-openable any time.
+  var vov = document.createElement("div");
+  vov.className = "rxs-vov";
+  vov.innerHTML =
+    '<div class="rxs-vcard" role="dialog" aria-modal="true">'
+    + '<div class="rxs-h"><h3 id="rxsvTitle">Coach feedback</h3><button class="rxs-x" id="rxsvClose" aria-label="Close">&times;</button></div>'
+    + '<div class="rxs-vwrap"><video id="rxsvVid" playsinline controls></video><canvas id="rxsvCanvas"></canvas></div>'
+    + '<div class="rxs-vfb" id="rxsvFb" style="display:none"></div>'
+    + '<div class="rxs-lab">Ask the coach about this</div>'
+    + '<div class="rxs-thread" id="rxsvThread"></div>'
+    + '<div class="rxs-row"><input class="rxs-inp" id="rxsvQ" placeholder="Question about the markup or your form…" style="flex:1;min-width:160px" /><button class="rxs-btn gold" id="rxsvSendQ">Ask</button></div>'
+    + '<div class="rxs-msg" id="rxsvMsg"></div>'
+    + '</div>';
+  document.body.appendChild(vov);
+
+  var $ = function (id) { return ov.querySelector(id) || rec.querySelector(id); };
+  var $V = function (id) { return vov.querySelector(id); };
+  var file = null, previewUrl = null;
+
+  function open() { ov.classList.add("on"); document.body.style.overflow = "hidden"; buildMovements(); render(); }
+  function close() { ov.classList.remove("on"); document.body.style.overflow = ""; }
+  fab.onclick = open;
+  ov.querySelector(".rxs-x").onclick = close;
+  ov.addEventListener("click", function (e) { if (e.target === ov) close(); });
+  window.addEventListener("keydown", function (e) { if (e.key === "Escape" && ov.classList.contains("on")) close(); });
+
+  function msg(t, kind) { var m = $("#rxsMsg"); m.textContent = t || ""; m.className = "rxs-msg" + (t ? " " + kind : ""); m.style.display = t ? "block" : "none"; }
+  function fmtDate(t) { try { return new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch (e) { return ""; } }
+  function fmtSize(b) { b = b || 0; return b > 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.round(b / 1024) + " KB"; }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+
+  /* ---- Movement names: from the current page's workouts ---- */
+  function pageWorkouts() {
+    // 1) explicit list the page may publish
+    try {
+      if (Array.isArray(window.RXS_WORKOUTS) && window.RXS_WORKOUTS.length) {
+        return window.RXS_WORKOUTS.map(function (s) { return String(s).trim(); }).filter(Boolean);
+      }
+    } catch (e) {}
+    // 2) scrape the strength pages' exercise cards (the <h2> movement name)
+    var out = [], seen = {};
+    try {
+      document.querySelectorAll(".exercise-card .card-title-block h2, .exercise-card h2").forEach(function (h) {
+        var t = (h.textContent || "").replace(/\s+/g, " ").trim();
+        if (t && !seen[t]) { seen[t] = 1; out.push(t); }
+      });
+    } catch (e) {}
+    return out;
+  }
+  var OTHER = "✎  Other / type my own…";
+  function buildMovements() {
+    var sel = $("#rxsMoveSel"), names = pageWorkouts();
+    sel.innerHTML = "";
+    names.forEach(function (n) { var o = document.createElement("option"); o.value = n; o.textContent = n.length > 70 ? n.slice(0, 68) + "…" : n; sel.appendChild(o); });
+    var o2 = document.createElement("option"); o2.value = "__other__"; o2.textContent = OTHER; sel.appendChild(o2);
+    // default to "Other" (free text) when the page exposes no workouts
+    sel.value = names.length ? names[0] : "__other__";
+    onMoveSel();
+  }
+  function onMoveSel() { var custom = $("#rxsMoveSel").value === "__other__"; var inp = $("#rxsMove"); inp.style.display = custom ? "block" : "none"; if (custom) inp.focus(); }
+  function chosenMovement() { var sel = $("#rxsMoveSel"); if (sel.value === "__other__") return $("#rxsMove").value.trim(); return sel.value.trim(); }
+
+  /* ---- Clip selection (record or file) ---- */
+  function clearPreview() { if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; } }
+  function setClip(blob) {
+    clearPreview();
+    var prev = $("#rxsPrev");
+    if (!blob) { file = null; prev.style.display = "none"; $("#rxsSend").disabled = true; return; }
+    if (blob.size > MAX_MB * 1024 * 1024) {
+      file = null; $("#rxsSend").disabled = true;
+      msg("That clip is over " + MAX_MB + " MB (" + fmtSize(blob.size) + ") — record a shorter set or pick a smaller file.", "err");
+      return;
+    }
+    file = blob;
+    previewUrl = URL.createObjectURL(blob); prev.src = previewUrl; prev.style.display = "block";
+    $("#rxsSend").disabled = false; msg("", "");
+  }
+
+  $("#rxsMoveSel").onchange = onMoveSel;
+  $("#rxsPick").onclick = function () { $("#rxsFile").click(); };
+  $("#rxsFile").onchange = function (e) { setClip(e.target.files && e.target.files[0]); };
+
+  /* ---- In-page recorder (front cam, movable window) ---- */
+  var stream = null, recorder = null, chunks = [], facing = "user", recording = false, recT = null, recS = 0;
+
+  function pickMime() {
+    var c = ["video/mp4;codecs=h264,aac", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
+    for (var i = 0; i < c.length; i++) { try { if (window.MediaRecorder && MediaRecorder.isTypeSupported(c[i])) return c[i]; } catch (e) {} }
+    return "";
+  }
+  function camSupported() { return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder); }
+
+  async function startCamera() {
+    stopStream();
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: true
+    });
+    var v = $("#rxsRecVid");
+    v.srcObject = stream;
+    v.style.transform = (facing === "user") ? "scaleX(-1)" : "none"; // mirror selfie preview only
+    try { await v.play(); } catch (e) {}
+  }
+  function stopStream() { if (stream) { try { stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} stream = null; } }
+
+  async function openRecorder() {
+    if (!camSupported()) { msg("This browser can’t record in-page — use “Choose a clip” instead.", "err"); return; }
+    msg("", "");
+    close(); // hide the modal so the workout stays visible behind the mini window
+    placeRecorder();
+    rec.classList.add("on");
+    setRecBtn(false); $("#rxsFlip").style.display = "";
+    $("#rxsRecTime").innerHTML = "&#9210; ready";
+    try { await startCamera(); }
+    catch (e) { rec.classList.remove("on"); open(); msg("Couldn’t open the camera — check permissions, or use “Choose a clip”.", "err"); }
+  }
+  function placeRecorder() {
+    var w = 184, h = 280;
+    rec.style.left = Math.max(8, window.innerWidth - w - 14) + "px";
+    rec.style.top = Math.max(8, window.innerHeight - h - 14) + "px";
+  }
+  function setRecBtn(isRec) {
+    var b = $("#rxsRecToggle");
+    b.className = "rxs-rec-btn" + (isRec ? " stop" : "");
+    b.title = isRec ? "Stop recording" : "Start recording";
+    b.setAttribute("aria-label", b.title);
+  }
+  function tickTime() {
+    recS++;
+    var m = Math.floor(recS / 60), s = recS % 60;
+    $("#rxsRecTime").innerHTML = '<span class="rxs-rec-dot"></span>' + m + ":" + (s < 10 ? "0" : "") + s;
+    if (recS >= REC_MAX_SEC) stopRecording();
+  }
+  function beginRecording() {
+    if (!stream) return;
+    chunks = []; recS = 0;
+    var m = pickMime();
+    try { recorder = m ? new MediaRecorder(stream, { mimeType: m, videoBitsPerSecond: REC_BITRATE, audioBitsPerSecond: 128000 }) : new MediaRecorder(stream); }
+    catch (e) { try { recorder = new MediaRecorder(stream); } catch (e2) { msg("Recording isn’t supported here — use “Choose a clip”.", "err"); return; } }
+    recorder.ondataavailable = function (ev) { if (ev.data && ev.data.size) chunks.push(ev.data); };
+    recorder.onstop = function () {
+      var type = (recorder && recorder.mimeType) || m || "video/webm";
+      var blob = new Blob(chunks, { type: type });
+      stopStream(); rec.classList.remove("on");
+      open(); // back to the modal with the clip ready to review + send
+      setClip(blob);
+    };
+    recorder.start();
+    recording = true; setRecBtn(true); $("#rxsFlip").style.display = "none";
+    recT = setInterval(tickTime, 1000); tickTime.call(null); recS = 0; $("#rxsRecTime").innerHTML = '<span class="rxs-rec-dot"></span>0:00';
+  }
+  function stopRecording() {
+    if (recT) { clearInterval(recT); recT = null; }
+    recording = false;
+    if (recorder && recorder.state !== "inactive") { try { recorder.stop(); } catch (e) {} }
+    else { stopStream(); rec.classList.remove("on"); open(); }
+  }
+  function cancelRecorder() {
+    if (recT) { clearInterval(recT); recT = null; }
+    if (recorder && recorder.state !== "inactive") { try { recorder.onstop = null; recorder.stop(); } catch (e) {} }
+    recording = false; recorder = null; stopStream(); rec.classList.remove("on"); open();
+  }
+
+  $("#rxsRec").onclick = function () { openRecorder(); };
+  $("#rxsRecToggle").onclick = function () { if (recording) stopRecording(); else beginRecording(); };
+  $("#rxsRecCancel").onclick = cancelRecorder;
+  $("#rxsFlip").onclick = async function () {
+    if (recording) return;
+    facing = (facing === "user") ? "environment" : "user";
+    try { await startCamera(); } catch (e) { facing = (facing === "user") ? "environment" : "user"; msg("Couldn’t switch camera.", "err"); }
+  };
+
+  // Drag the recorder window by its header (pointer events → works on touch).
+  (function () {
+    var hd = $("#rxsRecHd"), dragging = false, dx = 0, dy = 0;
+    hd.addEventListener("pointerdown", function (e) {
+      dragging = true; var r = rec.getBoundingClientRect(); dx = e.clientX - r.left; dy = e.clientY - r.top;
+      try { hd.setPointerCapture(e.pointerId); } catch (er) {}
+    });
+    hd.addEventListener("pointermove", function (e) {
+      if (!dragging) return;
+      var x = Math.min(window.innerWidth - rec.offsetWidth, Math.max(0, e.clientX - dx));
+      var y = Math.min(window.innerHeight - rec.offsetHeight, Math.max(0, e.clientY - dy));
+      rec.style.left = x + "px"; rec.style.top = y + "px";
+    });
+    hd.addEventListener("pointerup", function (e) { dragging = false; try { hd.releasePointerCapture(e.pointerId); } catch (er) {} });
+    window.addEventListener("resize", function () { if (rec.classList.contains("on")) placeRecorder(); });
+  })();
+
+  /* ---- Send ---- */
+  $("#rxsSend").onclick = function () {
+    if (!file) return;
+    if (!RoxReview.authed()) { msg("Sign in on the hub first, then resend.", "err"); return; }
+    var move = chosenMovement();
+    var qs = new URLSearchParams();
+    if (move) qs.set("movement", move);
+    if (SESSION) qs.set("session", SESSION);
+    var bar = $("#rxsBar"), fill = bar.querySelector("i");
+    bar.style.display = "block"; fill.style.width = "0%";
+    $("#rxsSend").disabled = true; $("#rxsRec").disabled = true; $("#rxsPick").disabled = true; msg("", "");
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", RoxReview.workerUrl() + "/review/upload?" + qs.toString());
+    xhr.setRequestHeader("authorization", "Bearer " + RoxReview.token());
+    xhr.setRequestHeader("content-type", file.type || "video/mp4");
+    xhr.upload.onprogress = function (ev) { if (ev.lengthComputable) fill.style.width = Math.round((ev.loaded / ev.total) * 100) + "%"; };
+    xhr.onload = function () {
+      bar.style.display = "none"; $("#rxsSend").disabled = false; $("#rxsRec").disabled = false; $("#rxsPick").disabled = false;
+      var d = {}; try { d = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status >= 200 && xhr.status < 300) {
+        msg("Sent to coach! David will review it and your feedback shows up here.", "ok");
+        setClip(null); $("#rxsFile").value = "";
+        render();
+      } else {
+        msg((d && d.error) || ("Upload failed (" + xhr.status + ")"), "err");
+      }
+    };
+    xhr.onerror = function () { bar.style.display = "none"; $("#rxsSend").disabled = false; $("#rxsRec").disabled = false; $("#rxsPick").disabled = false; msg("Network error — check your connection and retry.", "err"); };
+    xhr.send(file);
+  };
+
+  /* ---- feedback notifications (FAB badge + per-workout-card badge) ---- */
+  var SEEN_KEY = "roxlive.review.seen.v1";
+  function loadSeen() { try { return JSON.parse(localStorage.getItem(SEEN_KEY) || "{}") || {}; } catch (e) { return {}; } }
+  function saveSeen(s) { try { localStorage.setItem(SEEN_KEY, JSON.stringify(s)); } catch (e) {} }
+  function unread(it) {
+    if (!it) return false;
+    var s = loadSeen()[it.id] || null;
+    if (it.status === "reviewed" && (!s || !s.fb)) return true;                       // new coach feedback
+    if ((it.threadN || 0) > ((s && s.threadN) || 0) && it.lastBy === "coach") return true; // new coach reply
+    return false;
+  }
+  function markSeen(it) { var s = loadSeen(); s[it.id] = { fb: true, threadN: it.threadN || 0 }; saveSeen(s); }
+  function normName(x) { return String(x == null ? "" : x).replace(/\s+/g, " ").trim().toLowerCase(); }
+
+  function applyNotifications(items) {
+    items = items || [];
+    var me = RoxReview.user();
+    var mine = items.filter(function (it) { return !me || it.owner === me; });
+    var n = mine.filter(unread).length;
+    fabBadge.textContent = n > 9 ? "9+" : String(n);
+    fabBadge.style.display = n ? "block" : "none";
+    // Badge the matching exercise card on the strength pages (movement → card).
+    var cards = [].slice.call(document.querySelectorAll(".exercise-card"));
+    document.querySelectorAll(".rxs-cardbadge").forEach(function (b) { if (b.parentNode) b.parentNode.removeChild(b); });
+    if (!cards.length) return;
+    mine.forEach(function (it) {
+      if (it.status !== "reviewed" && !(it.threadN > 0)) return;
+      var card = null;
+      for (var i = 0; i < cards.length; i++) { var h = cards[i].querySelector(".card-title-block h2, h2"); if (h && normName(h.textContent) === normName(it.movement)) { card = cards[i]; break; } }
+      if (!card) return;
+      var host = card.querySelector(".card-title-block") || card.querySelector("summary") || card;
+      var isNew = unread(it);
+      var b = document.createElement("div");
+      b.className = "rxs-cardbadge" + (isNew ? " new" : "");
+      b.innerHTML = (isNew ? '<span class="d"></span>New coach feedback' : "&#10003; Coach feedback");
+      b.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); openViewer(it.id); });
+      host.appendChild(b);
+    });
+  }
+  async function refreshNotifications() {
+    if (!RoxReview.authed()) return;
+    try { applyNotifications(await RoxReview.list()); } catch (e) { /* offline — leave badges as-is */ }
+  }
+
+  /* ---- feedback viewer: marked-up clip + coach text + Q&A thread ---- */
+  var viewerShapes = [], viewerId = null, viewerUrl = null;
+  function vmsg(t, kind) { var m = $V("#rxsvMsg"); m.textContent = t || ""; m.className = "rxs-msg" + (t ? " " + kind : ""); m.style.display = t ? "block" : "none"; }
+  function angleDeg(a, v, b) { var v1 = [a[0] - v[0], a[1] - v[1]], v2 = [b[0] - v[0], b[1] - v[1]]; var d = v1[0] * v2[0] + v1[1] * v2[1]; var m = Math.hypot(v1[0], v1[1]) * Math.hypot(v2[0], v2[1]) || 1; return Math.acos(Math.max(-1, Math.min(1, d / m))) * 180 / Math.PI; }
+  function vDraw() {
+    var v = $V("#rxsvVid"), c = $V("#rxsvCanvas"); if (!v || !c) return;
+    c.width = v.clientWidth || c.width; c.height = v.clientHeight || c.height;
+    var ctx = c.getContext("2d"); if (!ctx) return;
+    ctx.clearRect(0, 0, c.width, c.height);
+    var cw = c.width, ch = c.height, vw = v.videoWidth || cw, vh = v.videoHeight || ch;
+    var s = Math.min(cw / vw, ch / vh), dw = vw * s, dh = vh * s, ox = (cw - dw) / 2, oy = (ch - dh) / 2;
+    function P(p) { return [ox + p[0] * dw, oy + p[1] * dh]; }
+    (viewerShapes || []).forEach(function (a) {
+      if (!a || !Array.isArray(a.pts)) return;
+      ctx.lineWidth = 3; ctx.strokeStyle = a.color || "#e6c088"; ctx.fillStyle = a.color || "#e6c088"; ctx.lineCap = "round";
+      if (a.type === "pen" && a.pts.length > 1) { ctx.beginPath(); var p0 = P(a.pts[0]); ctx.moveTo(p0[0], p0[1]); for (var i = 1; i < a.pts.length; i++) { var p = P(a.pts[i]); ctx.lineTo(p[0], p[1]); } ctx.stroke(); }
+      else if (a.type === "line" && a.pts.length >= 2) { var l0 = P(a.pts[0]), l1 = P(a.pts[1]); ctx.beginPath(); ctx.moveTo(l0[0], l0[1]); ctx.lineTo(l1[0], l1[1]); ctx.stroke(); }
+      else if (a.type === "circle" && a.pts.length >= 2) { var q0 = P(a.pts[0]), q1 = P(a.pts[1]); var rr = Math.hypot(q1[0] - q0[0], q1[1] - q0[1]); ctx.beginPath(); ctx.arc(q0[0], q0[1], rr, 0, 7); ctx.stroke(); }
+      else if (a.type === "angle" && a.pts.length >= 3) { var A = P(a.pts[0]), Vv = P(a.pts[1]), B = P(a.pts[2]); ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(Vv[0], Vv[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); ctx.font = "bold 15px Georgia,serif"; ctx.fillText(Math.round(angleDeg(a.pts[0], a.pts[1], a.pts[2])) + "°", Vv[0] + 10, Vv[1] - 10); }
+    });
+  }
+  function renderThread(it) {
+    var t = $V("#rxsvThread"); var msgs = (it && it.thread) || [];
+    if (!msgs.length) { t.innerHTML = '<div class="rxs-muted" style="padding:2px">No questions yet — ask the coach anything about the markup or your form.</div>'; return; }
+    t.innerHTML = "";
+    msgs.forEach(function (m) {
+      var el = document.createElement("div"); el.className = "rxs-bub " + (m.role === "coach" ? "coach" : "athlete");
+      el.innerHTML = '<div class="who">' + (m.role === "coach" ? "Coach" : "You") + '</div>' + esc(m.text);
+      t.appendChild(el);
+    });
+    t.scrollTop = t.scrollHeight;
+  }
+  function closeViewer() { vov.classList.remove("on"); var v = $V("#rxsvVid"); try { v.pause(); } catch (e) {} if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null; } viewerId = null; if (!ov.classList.contains("on")) document.body.style.overflow = ""; }
+  async function openViewer(id) {
+    viewerId = id; viewerShapes = []; vmsg("", "");
+    vov.classList.add("on"); document.body.style.overflow = "hidden";
+    var v = $V("#rxsvVid"); v.removeAttribute("src"); $V("#rxsvFb").style.display = "none"; $V("#rxsvThread").innerHTML = '<div class="rxs-muted">Loading…</div>';
+    try {
+      var it = await RoxReview.item(id);
+      $V("#rxsvTitle").textContent = it.movement || "Coach feedback";
+      if (it.feedback && it.feedback.text) { $V("#rxsvFb").textContent = it.feedback.text; $V("#rxsvFb").style.display = "block"; }
+      viewerShapes = (it.feedback && it.feedback.annotations && it.feedback.annotations.shapes) || [];
+      renderThread(it);
+      markSeen(it); refreshNotifications();
+      if (viewerUrl) { URL.revokeObjectURL(viewerUrl); viewerUrl = null; }
+      viewerUrl = await RoxReview.clipBlobUrl(id);
+      v.src = viewerUrl; v.load();
+      v.onloadeddata = vDraw; v.ontimeupdate = vDraw; v.onseeked = vDraw;
+    } catch (e) { vmsg(e.message || "Couldn’t load this feedback.", "err"); }
+  }
+  $V("#rxsvClose").onclick = closeViewer;
+  vov.addEventListener("click", function (e) { if (e.target === vov) closeViewer(); });
+  window.addEventListener("keydown", function (e) { if (e.key === "Escape" && vov.classList.contains("on")) closeViewer(); });
+  window.addEventListener("resize", function () { if (vov.classList.contains("on")) vDraw(); });
+  $V("#rxsvSendQ").onclick = async function () {
+    var inp = $V("#rxsvQ"), text = inp.value.trim(); if (!text || !viewerId) return;
+    $V("#rxsvSendQ").disabled = true;
+    try { var it = await RoxReview.message(viewerId, text); inp.value = ""; renderThread(it); markSeen(it); refreshNotifications(); vmsg("Sent to coach.", "ok"); }
+    catch (e) { vmsg(e.message || "Couldn’t send.", "err"); }
+    $V("#rxsvSendQ").disabled = false;
+  };
+
+  async function render() {
+    var form = $("#rxsForm"), list = $("#rxsList");
+    if (!RoxReview.authed()) {
+      form.style.display = "none";
+      list.innerHTML = '<div class="rxs-muted">Sign in on the hub to send clips to your coach. <a href="enter.html" style="color:#d4a868">Sign in →</a></div>';
+      return;
+    }
+    form.style.display = "block";
+    list.innerHTML = '<div class="rxs-muted">Loading your clips…</div>';
+    try {
+      var me = RoxReview.user();
+      var items = (await RoxReview.list()).filter(function (it) { return !me || it.owner === me; });
+      applyNotifications(items);
+      if (!items.length) { list.innerHTML = '<div class="rxs-muted">No clips yet — send your first set above.</div>'; return; }
+      list.innerHTML = '<div class="rxs-lab">Your clips</div>';
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        var st = it.status === "reviewed" ? "reviewed" : "pending"; // whitelist (never trust raw into HTML)
+        var isNew = unread(it);
+        var canView = it.status === "reviewed" || (it.threadN || 0) > 0 || it.hasFeedback;
+        var el = document.createElement("div"); el.className = "rxs-item";
+        el.innerHTML = '<div class="t"><b>' + esc(it.movement || "(untagged)") + (it.session ? ' · ' + esc(it.session) : '') + (isNew ? '<span class="rxs-newdot" title="New from coach"></span>' : '') + '</b>'
+          + '<span class="rxs-bdg ' + st + '">' + st + '</span></div>'
+          + '<div class="rxs-muted" style="margin-top:3px">' + fmtDate(it.createdAt) + ' · ' + fmtSize(it.size) + (it.threadN ? ' · ' + it.threadN + ' message' + (it.threadN === 1 ? '' : 's') : '') + '</div>'
+          + (canView ? '<div><button class="rxs-view" data-view="' + esc(it.id) + '">' + (isNew ? 'View coach feedback &#9679;' : 'View feedback &amp; markup') + '</button></div>' : '')
+          + '<div style="margin-top:6px"><button class="rxs-del" data-del="' + esc(it.id) + '">Delete</button></div>';
+        list.appendChild(el);
+      }
+      list.querySelectorAll("[data-view]").forEach(function (b) {
+        b.onclick = function () { openViewer(b.getAttribute("data-view")); };
+      });
+      list.querySelectorAll("[data-del]").forEach(function (b) {
+        b.onclick = async function () { if (!confirm("Delete this clip?")) return; try { await RoxReview.remove(b.getAttribute("data-del")); render(); } catch (e) { msg(e.message || "Couldn’t delete.", "err"); } };
+      });
+    } catch (e) { list.innerHTML = '<div class="rxs-muted">' + esc(e.message || "Couldn’t load your clips.") + '</div>'; }
+  }
+
+  // Surface coach feedback as soon as the page loads (FAB + workout-card badges),
+  // and again whenever the athlete returns to the tab.
+  refreshNotifications();
+  window.addEventListener("focus", refreshNotifications);
+})();
