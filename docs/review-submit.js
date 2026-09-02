@@ -24,6 +24,7 @@
   var REC_MAX_SEC = 180;            // hard ceiling so a forgotten recording can't balloon
 
   var CSS = ""
+    + ":root{--rxs-sab:env(safe-area-inset-bottom,0px);}"
     + ".rxs-fab{position:fixed;right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));z-index:9000;"
     + "font-family:'Marcellus',Georgia,serif;font-size:11px;line-height:1.15;letter-spacing:.04em;color:#1a1206;background:linear-gradient(180deg,#e6c088,#d4a868);"
     + "border:none;border-radius:100px;padding:8px 13px;max-width:62vw;box-shadow:0 6px 20px rgba(0,0,0,.42);cursor:pointer;display:flex;align-items:center;gap:6px;}"
@@ -235,10 +236,14 @@
 
   async function startCamera() {
     stopStream();
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: true
-    });
+    var vid = { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } };
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: vid, audio: true });
+    } catch (e) {
+      // Microphone declined, or no mic at all. A form check does not need sound,
+      // so ask again for video only instead of failing the whole recorder.
+      stream = await navigator.mediaDevices.getUserMedia({ video: vid, audio: false });
+    }
     var v = $("#rxsRecVid");
     v.srcObject = stream;
     v.style.transform = (facing === "user") ? "scaleX(-1)" : "none"; // mirror selfie preview only
@@ -250,17 +255,26 @@
     if (!camSupported()) { msg("This browser can’t record in-page — use “Choose a clip” instead.", "err"); return; }
     msg("", "");
     close(); // hide the modal so the workout stays visible behind the mini window
+    rec.classList.add("on");   // display first — placeRecorder measures it
     placeRecorder();
-    rec.classList.add("on");
     setRecBtn(false); $("#rxsFlip").style.display = "";
     $("#rxsRecTime").innerHTML = "&#9210; ready";
     try { await startCamera(); }
     catch (e) { rec.classList.remove("on"); open(); msg("Couldn’t open the camera — check permissions, or use “Choose a clip”.", "err"); }
   }
   function placeRecorder() {
-    var w = 184, h = 280;
+    // Measure. The window is ~329px tall; the 280 this used to assume put the
+    // record button below the fold on a phone, and under the home indicator on
+    // an iPhone. A page may also claim the bottom strip (an open timer, a
+    // sticky bar) via --rxs-avoid, in which case we sit above it.
+    var w = rec.offsetWidth || 184;
+    var h = rec.offsetHeight || 329;
+    var cs = getComputedStyle(document.documentElement);
+    var sab = parseFloat(cs.getPropertyValue("--rxs-sab")) || 0;
+    var avoid = parseFloat(cs.getPropertyValue("--rxs-avoid")) || 0;
+    var top = window.innerHeight - h - 14 - sab - avoid;
     rec.style.left = Math.max(8, window.innerWidth - w - 14) + "px";
-    rec.style.top = Math.max(8, window.innerHeight - h - 14) + "px";
+    rec.style.top = Math.max(8, top) + "px";
   }
   function setRecBtn(isRec) {
     var b = $("#rxsRecToggle");
